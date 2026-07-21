@@ -30,6 +30,7 @@ internal static class FeedSystem
     private const float HoverFoodIconOffsetY = 6f;
     private const string FeedRequestRpc = "FLG_FeedRequest";
     private const string FeedResponseRpc = "FLG_FeedResponse";
+    private const string TamedProgressionEffectPrefab = "fx_creature_tamed";
     private const long PendingRequestTimeoutTicks = TimeSpan.TicksPerSecond * 30;
 
     private static readonly Dictionary<string, RawFeedingRule> RawRules = new(StringComparer.OrdinalIgnoreCase);
@@ -2417,7 +2418,13 @@ internal static class FeedSystem
             }
 
             progress -= required;
+            int levelBefore = context.Character.GetLevel();
             context.Character.SetLevel(targetLevel);
+            if (context.Character.IsTamed() && context.Character.GetLevel() > levelBefore)
+            {
+                SpawnTamedProgressionEffect(((Component)context.Character).transform);
+            }
+
             currentLevel = targetLevel;
             ApplyEffectiveFedDuration(context);
 
@@ -2632,9 +2639,28 @@ internal static class FeedSystem
             }
 
             grownCharacter.SetLevel(currentCharacter.GetLevel());
+            if (currentCharacter.IsTamed())
+            {
+                SpawnTamedProgressionEffect(((Component)grownCharacter).transform);
+            }
         }
 
         growup.m_nview.Destroy();
+    }
+
+    private static void SpawnTamedProgressionEffect(Transform target)
+    {
+        ZNetScene? scene = ZNetScene.instance;
+        if ((object?)scene == null)
+        {
+            return;
+        }
+
+        GameObject? effectPrefab = scene.GetPrefab(TamedProgressionEffectPrefab);
+        if ((object?)effectPrefab != null)
+        {
+            UnityEngine.Object.Instantiate(effectPrefab, target.position, target.rotation);
+        }
     }
 
     private static bool AnyNearbyPlayerHasTamingBoost(Vector3 position)

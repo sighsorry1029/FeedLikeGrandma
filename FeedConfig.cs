@@ -449,26 +449,24 @@ internal static class FeedingYamlParser
             return;
         }
 
-        warnings.Add($"{Location(node)}: {context} must be a sequence. Use entries like '- Raspberry, 3'.");
+        warnings.Add($"{Location(node)}: {context} must be a sequence. Use entries like '- Raspberry' or '- Raspberry, 3'.");
     }
 
     private static void AddFoodNumber(Dictionary<string, float> foodNumbers, YamlNode node, string context, List<string> warnings)
     {
         string entryText = ReadScalar(node).Trim();
-        if (!TrySplitCommaValue(entryText, out string splitName, out string splitValue))
-        {
-            warnings.Add($"{Location(node)}: expected a food number entry in the form 'ItemName, value'.");
-            return;
-        }
+        bool hasExplicitValue = TrySplitCommaValue(entryText, out string splitName, out string splitValue);
 
-        string foodNameFromText = Unquote(splitName).Trim();
+        string foodNameFromText = Unquote(hasExplicitValue ? splitName : entryText).Trim();
         if (!TryParseFoodToken(foodNameFromText, node, warnings, out string prefabName, out int? requiredQuality))
         {
             return;
         }
 
         string foodKey = FormatFoodKey(prefabName, requiredQuality);
-        foodNumbers[foodKey] = Math.Max(0f, ParseFloat(splitValue, $"{context}.{foodKey}", node, warnings));
+        foodNumbers[foodKey] = hasExplicitValue
+            ? Math.Max(0f, ParseFloat(splitValue, $"{context}.{foodKey}", node, warnings))
+            : 1f;
     }
 
     internal static string FormatFoodKey(string prefabName, int? requiredQuality)

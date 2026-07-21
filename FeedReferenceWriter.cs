@@ -39,14 +39,56 @@ internal static class FeedReferenceWriter
         AppendLine(builder, 1, "# levelUpItems override level-up food for that level; otherwise consumeItems can also add level progress.");
         AppendLine(builder, 1, "# level-up-only food still applies healconstant and fedconstant.");
         builder.AppendLine();
-        builder.AppendLine("foodNumbers:                         # Global manual-feed numbers used by bare consumeItems.");
-        AppendLine(builder, 1, "- NeckTail, 2");
-        AppendLine(builder, 1, "- RawMeat, 2");
-        AppendLine(builder, 1, "- DeerMeat, 3");
-        AppendLine(builder, 1, "- FishRaw, 4");
-        AppendLine(builder, 1, "- Sausages, 4");
-        AppendLine(builder, 1, "- LoxMeat, 4");
-        AppendLine(builder, 1, "- ChickenMeat, 6");
+        builder.AppendLine("foodNumbers:                         # Global numbers used by bare consumeItems; omitted values default to 1.");
+        string[] defaultFoodNumbers =
+        {
+            "Mushroom",
+            "Raspberry",
+            "Honey, 2",
+            "NeckTail, 1.5",
+            "NeckTailGrilled, 2",
+            "RawMeat, 1.5",
+            "CookedMeat, 2",
+            "DeerMeat, 2",
+            "CookedDeerMeat, 2.5",
+            "Blueberries, 2",
+            "Carrot, 2",
+            "BjornMeat, 3",
+            "CookedBjornMeat, 4",
+            "Turnip, 2",
+            "Sausages, 4",
+            "FishRaw, 3",
+            "FishCooked, 4",
+            "SerpentMeat, 4",
+            "SerpentMeatCooked, 5",
+            "Onion, 3",
+            "WolfMeat, 2",
+            "CookedWolfMeat, 3",
+            "ChickenMeat, 4",
+            "CookedChickenMeat, 5",
+            "MushroomJotunPuffs, 2",
+            "Barley, 2",
+            "Cloudberry, 2",
+            "Flax, 2",
+            "LoxMeat, 3",
+            "CookedLoxMeat, 4",
+            "HareMeat, 4",
+            "CookedHareMeat, 6",
+            "MushroomMagecap, 2",
+            "AsksvinMeat, 3",
+            "CookedAsksvinMeat, 5",
+            "VoltureMeat, 3",
+            "CookedVoltureMeat, 5",
+            "BoneMawSerpentMeat, 5",
+            "CookedBoneMawSerpentMeat, 8",
+            "Fiddleheadfern, 3",
+            "MushroomSmokePuff, 3",
+            "Vineberry, 2"
+        };
+        foreach (string foodNumber in defaultFoodNumbers)
+        {
+            AppendLine(builder, 1, $"- {foodNumber}");
+        }
         builder.AppendLine();
         builder.AppendLine("Asksvin:");
         AppendLine(builder, 1, "levelUpItems:                       # level-up-only foods keyed by current Character level.");

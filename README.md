@@ -1,9 +1,88 @@
 # FeedLikeGrandma
 
-FeedLikeGrandma turns creature food into a complete progression system for Valheim.
-Feed creatures by hand, leave food on the ground, or stock a dedicated Feed Barrel to advance taming, growth, level, health, and fed time through one consistent set of rules.
+Feed creatures by hand to tame, grow, heal, and level them up. Capture and carry tames in Taming Orbs with creature icons, or automate feeding with Feed Barrels. Supports custom foods, modded creatures, stacked fed time, and riding improvements.
 
-It works with vanilla and modded tameables, generates a reference from the prefabs actually loaded in your game, and synchronizes gameplay settings and YAML rules from the server.
+## Showcase
+
+### Feed-driven progression
+
+![Feeding a wild creature until it is tamed](https://i.ibb.co/bMwcTLQP/feedtotame.gif)
+
+*Turn food into taming progress and complete the full wild-to-tamed journey by hand.*
+
+![Feeding a juvenile creature to accelerate growth](https://i.ibb.co/sddwcmmd/feedtogrow.gif)
+
+*Feed a tamed juvenile to advance its growth timer and raise it into its adult prefab.*
+
+![Leveling up a fully grown tamed creature](https://i.ibb.co/XfLWnd4q/levelup.gif)
+
+*Once growth is complete, feeding advances level progress and raises the creature one level at a time.*
+
+![Manual feeding with visible food choices and progress](https://i.ibb.co/mLRtDGb/feedwithhand.png)
+
+*Feed creatures directly from your inventory and see the accepted foods, taming gain, and stacked fed time immediately.*
+
+### Automatic feeding
+
+![A tameable collecting food supplied by a Feed Barrel](https://i.ibb.co/nq2MNX2m/autofeed.gif)
+
+*Hungry tameables walk to real food supplied from a nearby Feed Barrel, preserving normal pathfinding and eating behavior.*
+
+![Feed Barrel in the Hammer build menu](https://i.ibb.co/9mjyJdDP/feedbarrel-craft.png)
+
+*Build the dedicated Feed Barrel with a configurable recipe, material, and container size.*
+
+### Taming Orb
+
+![Capturing and releasing a tameable with a Taming Orb](https://i.ibb.co/MxZKWv63/tamingorb.gif)
+
+*Capture one tamed creature for travel, then release it at the surface under your aim.*
+
+![Filled Taming Orbs displaying their captured creatures](https://i.ibb.co/7dfbBWQb/tamingorbs.png)
+
+*Every filled orb overlays the captured creature on its icon, making multiple stored tameables easy to identify.*
+
+![Taming Orb crafting recipe](https://i.ibb.co/7x9t9pMq/tamingorb-craft.png)
+
+*Craft reusable Taming Orbs from a configurable recipe and crafting station.*
+
+### Food and progress UI
+
+![Wolf daily food choices and food numbers](https://i.ibb.co/93S2BvXr/wolffood.png)
+
+*Daily foods appear in one row with their individual food numbers, while hover text shows fed and level progress.*
+
+![Growing dragon food choices and progress](https://i.ibb.co/LznxtgjL/dragonfood.png)
+
+*Juvenile creatures show growth and fed timers, with level progression locked until growth is complete.*
+
+![Asksvin daily and level-up-only food rows](https://i.ibb.co/VcybBWFC/asksvinfood.png)
+
+*Level-up-only food is displayed above ordinary food with the exact level transition it advances.*
+
+![Dragon level-up food with quality and value requirements](https://i.ibb.co/VcGLqfzg/levelupcanneedspecialfood.png)
+
+*Assign special level-up food by current creature level, including required item quality and a custom progress value.*
+
+![Asksvin using a dedicated food for its next level](https://i.ibb.co/Pz6NvhNR/levelupcanneedspecialfood2.png)
+
+*A configured level can require its own exclusive food without replacing the creature's everyday diet.*
+
+### Taming boost
+
+![Brew of Animal Whispers taming boost tooltip](https://i.ibb.co/svRdn0Lx/tamerpotion.png)
+
+*TamingBoost tooltips expose the active passive-taming, passive-growth, and feed-efficiency multipliers.*
+
+### Riding compatibility
+
+![Dragon flight blocked in a restricted biome](https://i.ibb.co/RpXMjN1x/dragonbiomerestriction.gif)
+
+*Configured biome restrictions force dragons out of flight and reject new flight attempts with clear feedback.*
+
+![Monstrum mount jumping without dismounting its rider](https://i.ibb.co/yFYKng0D/monstrumtamejump.gif)
+
+*Compatibility handling keeps riders attached when supported Monstrum mounts perform their own jump.*
 
 ## Why use it?
 
@@ -94,13 +173,12 @@ defaults:
   feed: [20, 15, 30, 25, 120]
 
 foodNumbers:
-  - NeckTail, 2
-  - RawMeat, 2
-  - DeerMeat, 3
-  - FishRaw, 4
-  - Sausages, 4
-  - LoxMeat, 4
-  - ChickenMeat, 6
+  - Mushroom
+  - Raspberry
+  - Honey, 2
+  - NeckTail, 1.5
+  - NeckTailGrilled, 2
+...
 
 Wolf:
   consumeItems:
@@ -119,6 +197,8 @@ DModer_Ygg4_Elder:
   mountStamina: [150, 80, 0.75]
   restrictedBiome: [Ashlands]
 ```
+
+In `foodNumbers`, an item without an explicit value uses `1`, so `- Mushroom` is equivalent to `- Mushroom, 1`.
 
 ### Food syntax
 
@@ -300,44 +380,3 @@ Run the console command below after adding or removing creature mods to force a 
 ```text
 flg:reference
 ```
-
-Do not edit `feed.reference.yml` as an active configuration file; it may be regenerated.
-
-## Multiplayer
-
-- Install FeedLikeGrandma on the dedicated server and all clients.
-- Keep the DLL version identical across peers.
-- ServerSync distributes BepInEx gameplay settings and the active YAML text.
-- With `Lock Configuration = On`, the server controls synchronized settings.
-- Client-only display settings such as crouch-to-show icons and icon size remain local.
-- Manual feed requests are validated and applied by the network owner before inventory items are removed.
-
-## Localization
-
-English and Korean are embedded. The package also includes `FeedLikeGrandma.English.yml` as an editable external English localization file. Localization uses Valheim's native token table through the bundled LocalizationManager and does not require Jotunn.
-
-## Troubleshooting
-
-### A creature does not appear in the reference
-
-Enter a world, wait until the creature mod has registered its prefabs, then run `flg:reference`. Only tame-, growth-, breeding-, egg-growth-, or consume-related prefabs are included.
-
-### A creature ignores the Feed Barrel
-
-Confirm that it is hungry and calm, the barrel contains a valid current-level food, the barrel is within the creature's own search range, and a walkable path exists to a free point beside the barrel.
-
-### Daily food does not increase level progress
-
-Check whether `levelUpItems` has a row for the creature's current Character level. When it does, only that row advances level progress. Also verify required item quality and the configured maximum level.
-
-### Local YAML changes do nothing in multiplayer
-
-The remote server is authoritative. Edit the server's `BepInEx/config/FeedLikeGrandma/feed.yml` instead.
-
-### A modded prefab is reported missing
-
-Use the exact prefab key written in `feed.reference.yml`, including capitalization and any mod-specific prefix.
-
-## Credits
-
-FeedLikeGrandma bundles ServerSync, YamlDotNet, and LocalizationManager support into its own DLL. Thanks to their maintainers and to the Valheim modding community whose creature and riding systems informed the compatibility work.
