@@ -1,0 +1,9 @@
+{
+  "name": "FeedLikeGrandma",
+  "version_number": "1.0.0",
+  "website_url": "https://github.com",
+  "description": "Manual feeding, tame and growth acceleration, and star progression for configured tameable creatures.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2333"
+  ]
+}
