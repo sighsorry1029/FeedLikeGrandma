@@ -1230,14 +1230,18 @@ internal static class FeedSystem
 
     internal static void UpdateHoverIcons(Player player)
     {
-        if (_hoverHud == null)
+        Hud? hud = Hud.instance;
+        if (hud == null || hud.m_rootObject == null)
         {
-            if ((object)Hud.instance == null)
-            {
-                return;
-            }
+            _hoverHud?.Destroy();
+            _hoverHud = null;
+            return;
+        }
 
-            _hoverHud = new HoverFoodIconHud();
+        if (_hoverHud == null || !_hoverHud.IsValidFor(hud))
+        {
+            _hoverHud?.Destroy();
+            _hoverHud = new HoverFoodIconHud(hud);
         }
 
         if (!TryGetHoverFoods(player, out HoverFoodRows rows))
@@ -2760,6 +2764,8 @@ internal static class FeedSystem
     {
         private readonly List<HoverFoodIcon> _levelUpIcons = new();
         private readonly List<HoverFoodIcon> _dailyIcons = new();
+        private readonly Hud _ownerHud;
+        private readonly GameObject _ownerRoot;
         private readonly GameObject _root;
         private readonly RectTransform _rootTransform;
         private readonly GameObject? _levelUpRow;
@@ -2775,24 +2781,13 @@ internal static class FeedSystem
         private bool _contentShown;
         private float _nextAnchorUpdateTime;
 
-        public HoverFoodIconHud()
+        public HoverFoodIconHud(Hud ownerHud)
         {
-            if ((object)Hud.instance == null)
-            {
-                _root = new GameObject("FeedLikeGrandmaHoverIcons");
-                _rootTransform = _root.AddComponent<RectTransform>();
-                _levelUpRow = null;
-                _levelUpRowTransform = null;
-                _levelUpLabel = null;
-                _dailyRow = null;
-                _dailyRowTransform = null;
-                _root.SetActive(false);
-                return;
-            }
-
+            _ownerHud = ownerHud;
+            _ownerRoot = ownerHud.m_rootObject;
             _root = new GameObject("FeedLikeGrandmaHoverIcons", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
             _rootTransform = _root.GetComponent<RectTransform>();
-            _rootTransform.SetParent(Hud.instance.m_rootObject.transform, false);
+            _rootTransform.SetParent(_ownerRoot.transform, false);
             _rootTransform.anchorMin = new Vector2(0.5f, 0.5f);
             _rootTransform.anchorMax = new Vector2(0.5f, 0.5f);
             _rootTransform.pivot = new Vector2(0f, 0f);
@@ -2813,9 +2808,18 @@ internal static class FeedSystem
             _root.SetActive(false);
         }
 
+        public bool IsValidFor(Hud? hud)
+        {
+            return hud != null &&
+                   _ownerHud == hud &&
+                   _ownerRoot == hud.m_rootObject &&
+                   _root != null &&
+                   _rootTransform != null;
+        }
+
         public void Show(HoverFoodRows rows)
         {
-            if ((object)Hud.instance == null)
+            if (!IsValidFor(Hud.instance))
             {
                 return;
             }
@@ -2865,7 +2869,7 @@ internal static class FeedSystem
 
         public void Destroy()
         {
-            if ((object?)_root != null)
+            if (_root != null)
             {
                 UnityEngine.Object.Destroy(_root);
             }
@@ -2944,9 +2948,9 @@ internal static class FeedSystem
             return Mathf.Max(1f, HoverFoodIconSpacing * 0.35f);
         }
 
-        private static void SetActiveIfChanged(GameObject gameObject, bool active)
+        private static void SetActiveIfChanged(GameObject? gameObject, bool active)
         {
-            if ((object?)gameObject != null && gameObject.activeSelf != active)
+            if (gameObject != null && gameObject.activeSelf != active)
             {
                 gameObject.SetActive(active);
             }
@@ -2954,22 +2958,21 @@ internal static class FeedSystem
 
         private static Vector2 GetHoverTextIconAnchor()
         {
-            if ((object)Hud.instance == null ||
-                (object?)Hud.instance.m_hoverName == null ||
-                (object?)Hud.instance.m_rootObject == null)
+            Hud? hud = Hud.instance;
+            if (hud == null || hud.m_hoverName == null || hud.m_rootObject == null)
             {
                 return new Vector2(0f, HoverFoodIconOffsetY);
             }
 
-            RectTransform? parent = Hud.instance.m_rootObject.transform as RectTransform;
-            RectTransform hoverTransform = Hud.instance.m_hoverName.rectTransform;
-            if ((object?)parent == null || (object?)hoverTransform == null)
+            RectTransform? parent = hud.m_rootObject.transform as RectTransform;
+            RectTransform hoverTransform = hud.m_hoverName.rectTransform;
+            if (parent == null || hoverTransform == null)
             {
                 return new Vector2(0f, HoverFoodIconOffsetY);
             }
 
-            Hud.instance.m_hoverName.ForceMeshUpdate();
-            Bounds textBounds = Hud.instance.m_hoverName.textBounds;
+            hud.m_hoverName.ForceMeshUpdate();
+            Bounds textBounds = hud.m_hoverName.textBounds;
             Vector3 topLeftWorld;
             if (textBounds.size.sqrMagnitude > 0.001f)
             {

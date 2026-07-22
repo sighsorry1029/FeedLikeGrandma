@@ -375,8 +375,5 @@ Recommended workflow:
 5. Add food numbers or `levelUpItems` as needed.
 6. Save the file and let live reload apply it.
 
-Run the console command below after adding or removing creature mods to force a fresh reference write:
-
-```text
-flg:reference
-```
+## Github
+https://github.com/sighsorry1029/FeedLikeGrandma
