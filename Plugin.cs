@@ -32,7 +32,7 @@ internal enum RuntimeRefreshFlags
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.0.1";
+    internal const string ModVersion = "1.0.2";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -53,6 +53,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
     internal static CustomSyncedValue<string> SyncedYaml = null!;
 
     internal static ConfigEntry<Toggle> ServerConfigLocked = null!;
+    internal static ConfigEntry<Toggle> ShowFeedingHelp = null!;
     internal static ConfigEntry<int> MaxItemsPerFeed = null!;
     internal static ConfigEntry<float> FeedCooldownSeconds = null!;
     internal static ConfigEntry<LevelUpLimit> LevelUpLimitMode = null!;
@@ -81,6 +82,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
     internal static ConfigEntry<float> MeadTamerFeedMultiplier = null!;
     internal static ConfigEntry<bool> RequireCrouchForFoodIcons = null!;
     internal static ConfigEntry<float> FoodIconSize = null!;
+    internal static ConfigEntry<Toggle> ShowFoodEvenIfAlerted = null!;
     internal static ConfigEntry<string> TamingOrbRecipe = null!;
     internal static ConfigEntry<string> TamingOrbCraftingStation = null!;
 
@@ -198,6 +200,9 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         ServerConfigLocked = config(general, "Lock Configuration", Toggle.On,
             "If on, the synced config and YAML are controlled by the server.", order: 1000);
 
+        ShowFeedingHelp = config(general, "Show Feeding Help", Toggle.On,
+            "If on, shows a brief hotbar feeding instruction below creature progress while food icons are visible.", synchronizedSetting: false, order: 995);
+
         HorizontalProcreationLimit = config(general, "Horizontal Procreation Limit", Toggle.On,
             "If on, breeding total limits count adults and offspring by horizontal XZ distance, preventing vertical breeder limit bypasses.", order: 990);
 
@@ -230,6 +235,9 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
         FoodIconSize = config(feeding, "Food Icon Size", 36f,
             new ConfigDescription("Size of each hover food icon in pixels.", new AcceptableValueRange<float>(16f, 96f)), synchronizedSetting: false, order: 990);
+
+        ShowFoodEvenIfAlerted = config(feeding, "Show Food Even If Alerted", Toggle.On,
+            "If on, food icons remain visible while a creature is alerted. Feeding is still blocked while alerted.", order: 985);
 
         MaxItemsPerFeed = config(feeding, "Max Items Per Feed", 10,
             new ConfigDescription("Maximum number of items consumed by one manual feed action.", new AcceptableValueRange<int>(1, 100)), order: 980);

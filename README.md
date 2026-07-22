@@ -84,18 +84,6 @@ Feed creatures by hand to tame, grow, heal, and level them up. Capture and carry
 
 *Compatibility handling keeps riders attached when supported Monstrum mounts perform their own jump.*
 
-## Why use it?
-
-- Make every useful food meaningful instead of treating feeding as a simple hungry/not-hungry switch.
-- Progress wild creatures, offspring, and adult tameables through the same interaction.
-- Give rare or high-quality food a distinct role in level progression.
-- See food choices and exact progress directly on the creature hover UI.
-- Automate feeding without turning it into an invisible inventory transaction.
-- Configure modded creatures by prefab name without adding hard dependencies on their mods.
-- Keep multiplayer results authoritative and consistent through ServerSync.
-
-FeedLikeGrandma does not require Jotunn. Optional integrations activate only when their corresponding mods are installed.
-
 ## Core progression
 
 Each food has a `foodNumber`. The active feed constants convert that number into five effects:

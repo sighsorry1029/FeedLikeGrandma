@@ -118,6 +118,7 @@ internal static class FeedSystem
     private static int _nextRequestId = 1;
     private static int _hoverTextTargetId;
     private static int _hoverTextTimeBucket = -1;
+    private static int _hoverTextUiState = -1;
     private static string _hoverTextOriginal = string.Empty;
     private static string _hoverTextLanguage = string.Empty;
     private static string _hoverTextResult = string.Empty;
@@ -1110,9 +1111,11 @@ internal static class FeedSystem
         string sourceText = originalText ?? string.Empty;
         int targetId = character == null ? 0 : character.GetInstanceID();
         int timeBucket = Mathf.FloorToInt(Time.unscaledTime);
+        int uiState = GetHoverTextUiState();
         string language = Localization.instance == null ? string.Empty : Localization.instance.GetSelectedLanguage();
         if (_hoverTextTargetId == targetId &&
             _hoverTextTimeBucket == timeBucket &&
+            _hoverTextUiState == uiState &&
             string.Equals(_hoverTextOriginal, sourceText, StringComparison.Ordinal) &&
             string.Equals(_hoverTextLanguage, language, StringComparison.Ordinal))
         {
@@ -1121,7 +1124,7 @@ internal static class FeedSystem
 
         if (!TryBuildContext(character, out FeedTargetContext context))
         {
-            return RememberHoverText(targetId, timeBucket, sourceText, language, sourceText);
+            return RememberHoverText(targetId, timeBucket, uiState, sourceText, language, sourceText);
         }
 
         List<string> lines = new();
@@ -1194,25 +1197,53 @@ internal static class FeedSystem
             }
         }
 
+        if (FeedLikeGrandmaPlugin.ShowFeedingHelp.Value.IsOn() &&
+            TryBuildHoverFoodRows(Player.m_localPlayer, context, out HoverFoodRows foodRows) &&
+            foodRows.TotalCount > 0)
+        {
+            lines.Add(FeedLocalization.Text("$flg_hover_feed_instruction"));
+        }
+
         if (lines.Count == 0)
         {
-            return RememberHoverText(targetId, timeBucket, sourceText, language, sourceText);
+            return RememberHoverText(targetId, timeBucket, uiState, sourceText, language, sourceText);
         }
 
         string baseText = sourceText.Length == 0 ? context.Character.GetHoverName() : sourceText;
         string result = baseText + "\n" + string.Join("\n", lines);
-        return RememberHoverText(targetId, timeBucket, sourceText, language, result);
+        return RememberHoverText(targetId, timeBucket, uiState, sourceText, language, result);
+    }
+
+    private static int GetHoverTextUiState()
+    {
+        int state = FeedLikeGrandmaPlugin.ShowFeedingHelp.Value.IsOn() ? 1 : 0;
+        if (FeedLikeGrandmaPlugin.ShowFoodEvenIfAlerted.Value.IsOn())
+        {
+            state |= 2;
+        }
+
+        Player? player = Player.m_localPlayer;
+        bool foodIconInputActive = player != null &&
+                                   (!FeedLikeGrandmaPlugin.RequireCrouchForFoodIcons.Value || player.IsCrouching());
+        if (foodIconInputActive)
+        {
+            state |= 4;
+        }
+
+        return state;
     }
 
     private static string RememberHoverText(
         int targetId,
         int timeBucket,
+        int uiState,
         string originalText,
         string language,
         string result)
     {
         _hoverTextTargetId = targetId;
         _hoverTextTimeBucket = timeBucket;
+        _hoverTextUiState = uiState;
         _hoverTextOriginal = originalText;
         _hoverTextLanguage = language;
         _hoverTextResult = result;
@@ -1223,6 +1254,7 @@ internal static class FeedSystem
     {
         _hoverTextTargetId = 0;
         _hoverTextTimeBucket = -1;
+        _hoverTextUiState = -1;
         _hoverTextOriginal = string.Empty;
         _hoverTextLanguage = string.Empty;
         _hoverTextResult = string.Empty;
@@ -1498,8 +1530,18 @@ internal static class FeedSystem
         }
 
         CleanupPendingRequests(nowTicks);
+        int available = CountItemsByPrefab(player.GetInventory(), itemPrefabName, itemQuality);
+        int reserved = CountPendingItems(itemPrefabName, itemQuality);
+        int requestedAmount = Mathf.Min(
+            Mathf.Max(0, available - reserved),
+            FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
+        if (requestedAmount <= 0)
+        {
+            FeedLocalization.Message(player, "$flg_feed_no_matching_item");
+            return true;
+        }
+
         int requestId = _nextRequestId++;
-        int requestedAmount = Mathf.Min(Mathf.Max(1, item.m_stack), FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
         PendingRequests[requestId] = new PendingFeedRequest
         {
             RequestId = requestId,
@@ -1517,7 +1559,8 @@ internal static class FeedSystem
             RequesterId = player.GetZDOID(),
             ItemPrefabName = itemPrefabName,
             ItemQuality = itemQuality,
-            RequestedAmount = requestedAmount
+            RequestedAmount = requestedAmount,
+            RequesterHasTamingBoost = player.GetSEMan().HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost)
         };
 
         context.NView.InvokeRPC(FeedRequestRpc, request.Write());
@@ -1587,14 +1630,13 @@ internal static class FeedSystem
             return;
         }
 
-        FeedResponseMessage response = ProcessFeedRequest(((Component)nview).gameObject, request, requester);
+        FeedResponseMessage response = ProcessFeedRequest(((Component)nview).gameObject, request);
         requester.m_nview.InvokeRPC(FeedResponseRpc, response.Write());
     }
 
     private static FeedResponseMessage ProcessFeedRequest(
         GameObject targetObject,
-        FeedRequestMessage request,
-        Player requester)
+        FeedRequestMessage request)
     {
         FeedResponseMessage response = new()
         {
@@ -1626,14 +1668,7 @@ internal static class FeedSystem
             return response;
         }
 
-        int available = CountItemsByPrefab(requester.GetInventory(), request.ItemPrefabName, requestQuality);
-        if (available <= 0)
-        {
-            response.Message = FeedLocalization.Text("$flg_feed_no_matching_item");
-            return response;
-        }
-
-        int amount = Mathf.Min(request.RequestedAmount, available, FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
+        int amount = Mathf.Min(request.RequestedAmount, FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
         if (amount <= 0)
         {
             response.Message = FeedLocalization.Text("$flg_feed_no_items_consumed");
@@ -1649,8 +1684,7 @@ internal static class FeedSystem
             return response;
         }
 
-        bool requesterHasTamingBoost = requester.GetSEMan().HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost);
-        float feedMultiplier = requesterHasTamingBoost ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier() : 1f;
+        float feedMultiplier = request.RequesterHasTamingBoost ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier() : 1f;
         FeedEffectPlan plan = BuildFeedEffectPlan(
             context,
             dailyFood,
@@ -1894,7 +1928,16 @@ internal static class FeedSystem
             return;
         }
 
-        RemoveItemsByPrefab(player.GetInventory(), pending.ItemPrefabName, pending.ItemQuality, response.ConsumedAmount);
+        int removedAmount = RemoveItemsByPrefab(
+            player.GetInventory(),
+            pending.ItemPrefabName,
+            pending.ItemQuality,
+            response.ConsumedAmount);
+        if (removedAmount != response.ConsumedAmount)
+        {
+            FeedLikeGrandmaPlugin.Log.LogWarning(
+                $"Feed response {response.RequestId} consumed {response.ConsumedAmount} item(s), but only {removedAmount} matching item(s) remained in the local inventory.");
+        }
 
         Vector3 basePosition = response.DisplayPosition;
         int line = 0;
@@ -2019,23 +2062,32 @@ internal static class FeedSystem
     private static bool TryGetHoverFoods(Player player, out HoverFoodRows rows)
     {
         rows = default;
-        if ((object?)player == null)
-        {
-            return false;
-        }
-
-        if (FeedLikeGrandmaPlugin.RequireCrouchForFoodIcons.Value && !player.IsCrouching())
+        if (player == null)
         {
             return false;
         }
 
         GameObject? hoverObject = player.GetHoverObject();
-        if ((object?)hoverObject == null || !TryBuildContext(hoverObject, out FeedTargetContext context))
+        if (hoverObject == null || !TryBuildContext(hoverObject, out FeedTargetContext context))
         {
             return false;
         }
 
-        if ((object?)context.BaseAI != null && context.BaseAI.IsAlerted())
+        return TryBuildHoverFoodRows(player, context, out rows);
+    }
+
+    private static bool TryBuildHoverFoodRows(Player? player, FeedTargetContext context, out HoverFoodRows rows)
+    {
+        rows = default;
+        if (player == null ||
+            (FeedLikeGrandmaPlugin.RequireCrouchForFoodIcons.Value && !player.IsCrouching()))
+        {
+            return false;
+        }
+
+        if (context.BaseAI != null &&
+            context.BaseAI.IsAlerted() &&
+            !FeedLikeGrandmaPlugin.ShowFoodEvenIfAlerted.Value.IsOn())
         {
             return false;
         }
@@ -2710,13 +2762,29 @@ internal static class FeedSystem
         return count;
     }
 
-    private static void RemoveItemsByPrefab(Inventory inventory, string prefabName, int itemQuality, int amount)
+    private static int CountPendingItems(string prefabName, int itemQuality)
+    {
+        int count = 0;
+        foreach (PendingFeedRequest pending in PendingRequests.Values)
+        {
+            if (pending.ItemQuality == itemQuality &&
+                pending.ItemPrefabName.Equals(prefabName, StringComparison.OrdinalIgnoreCase))
+            {
+                count += pending.RequestedAmount;
+            }
+        }
+
+        return count;
+    }
+
+    private static int RemoveItemsByPrefab(Inventory inventory, string prefabName, int itemQuality, int amount)
     {
         if (amount <= 0)
         {
-            return;
+            return 0;
         }
 
+        int removedAmount = 0;
         foreach (ItemDrop.ItemData item in inventory.GetAllItems().ToList())
         {
             if (!ItemMatches(item, prefabName, itemQuality))
@@ -2727,11 +2795,14 @@ internal static class FeedSystem
             int remove = Mathf.Min(amount, item.m_stack);
             inventory.RemoveItem(item, remove);
             amount -= remove;
+            removedAmount += remove;
             if (amount <= 0)
             {
                 break;
             }
         }
+
+        return removedAmount;
     }
 
     private static bool ItemMatches(ItemDrop.ItemData item, string prefabName, int itemQuality)
@@ -3252,6 +3323,7 @@ internal static class FeedSystem
         public string ItemPrefabName { get; init; } = string.Empty;
         public int ItemQuality { get; init; } = 1;
         public int RequestedAmount { get; init; }
+        public bool RequesterHasTamingBoost { get; init; }
 
         public ZPackage Write()
         {
@@ -3261,6 +3333,7 @@ internal static class FeedSystem
             pkg.Write(ItemPrefabName);
             pkg.Write(ItemQuality);
             pkg.Write(RequestedAmount);
+            pkg.Write(RequesterHasTamingBoost);
             return pkg;
         }
 
@@ -3275,7 +3348,8 @@ internal static class FeedSystem
                     RequesterId = pkg.ReadZDOID(),
                     ItemPrefabName = pkg.ReadString(),
                     ItemQuality = pkg.ReadInt(),
-                    RequestedAmount = pkg.ReadInt()
+                    RequestedAmount = pkg.ReadInt(),
+                    RequesterHasTamingBoost = pkg.ReadBool()
                 };
                 return true;
             }
