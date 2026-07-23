@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -42,6 +43,8 @@ internal static class FeedSystem
     private static readonly HashSet<int> RegisteredTargetViews = new();
     private static readonly HashSet<int> RegisteredPlayerViews = new();
     private static readonly List<Player> NearbyTamingBoostPlayers = new();
+    private static bool _creatureManagerModifierApiResolved;
+    private static MethodInfo? _creatureManagerInheritModifiers;
     private static TMP_FontAsset? CachedHudFont;
     private static readonly HashSet<string> ExcludedPrefabNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -140,6 +143,8 @@ internal static class FeedSystem
         RegisteredTargetViews.Clear();
         RegisteredPlayerViews.Clear();
         NearbyTamingBoostPlayers.Clear();
+        _creatureManagerModifierApiResolved = false;
+        _creatureManagerInheritModifiers = null;
         CachedHudFont = null;
         FeedDefaults = new RawFeedValues();
         _nextRequestId = 1;
@@ -2475,7 +2480,7 @@ internal static class FeedSystem
 
             progress -= required;
             int levelBefore = context.Character.GetLevel();
-            context.Character.SetLevel(targetLevel);
+            SetLevelPreservingCllcModifiers(context.Character, targetLevel);
             if (context.Character.IsTamed() && context.Character.GetLevel() > levelBefore)
             {
                 SpawnTamedProgressionEffect(((Component)context.Character).transform);
@@ -2686,6 +2691,7 @@ internal static class FeedSystem
 
     private static void GrowNow(Growup growup, Character currentCharacter)
     {
+        TamingOrbSystem.CaptureCllcModifiers(currentCharacter, out string cllcInfusion, out string cllcExtraEffect);
         Character? grownCharacter = UnityEngine.Object.Instantiate(growup.GetPrefab(), ((Component)growup).transform.position, ((Component)growup).transform.rotation).GetComponent<Character>();
         if ((object?)grownCharacter != null)
         {
@@ -2695,6 +2701,8 @@ internal static class FeedSystem
             }
 
             grownCharacter.SetLevel(currentCharacter.GetLevel());
+            InheritCreatureManagerModifiers(currentCharacter, grownCharacter);
+            TamingOrbSystem.RestoreCllcModifiers(grownCharacter, cllcInfusion, cllcExtraEffect);
             if (currentCharacter.IsTamed())
             {
                 SpawnTamedProgressionEffect(((Component)grownCharacter).transform);
@@ -2702,6 +2710,51 @@ internal static class FeedSystem
         }
 
         growup.m_nview.Destroy();
+    }
+
+    private static void SetLevelPreservingCllcModifiers(Character character, int level)
+    {
+        TamingOrbSystem.CaptureCllcModifiers(character, out string cllcInfusion, out string cllcExtraEffect);
+        try
+        {
+            character.SetLevel(level);
+        }
+        finally
+        {
+            TamingOrbSystem.RestoreCllcModifiers(character, cllcInfusion, cllcExtraEffect);
+        }
+    }
+
+    private static void InheritCreatureManagerModifiers(Character source, Character target)
+    {
+        if (!_creatureManagerModifierApiResolved)
+        {
+            _creatureManagerModifierApiResolved = true;
+            Assembly? assembly = AppDomain.CurrentDomain
+                .GetAssemblies()
+                .FirstOrDefault(loaded => loaded.GetName().Name == "CreatureManager");
+            Type? modifierManager = assembly?.GetType("CreatureManager.CreatureModifierManager");
+            _creatureManagerInheritModifiers = modifierManager?.GetMethod(
+                "InheritModifiers",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
+                null,
+                new[] { typeof(Character), typeof(Character) },
+                null);
+        }
+
+        if (_creatureManagerInheritModifiers == null)
+        {
+            return;
+        }
+
+        try
+        {
+            _creatureManagerInheritModifiers.Invoke(null, new object[] { source, target });
+        }
+        catch (Exception ex)
+        {
+            FeedLikeGrandmaPlugin.Log.LogDebug($"Could not inherit CreatureManager modifiers during growth: {ex.Message}");
+        }
     }
 
     private static void SpawnTamedProgressionEffect(Transform target)

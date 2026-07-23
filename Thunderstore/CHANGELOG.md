@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.4
+
+- Preserved CL&LC infusion and extra effects when tamed creatures level up or grow, preventing effect rerolls.
+- Inherited CreatureManager modifiers when tamed creatures grow into their adult prefabs.
+
 ## 1.0.3
 
 - Kept the Taming Orb prefab registered when its recipe is disabled, preserving stored orbs across dedicated-server restarts.

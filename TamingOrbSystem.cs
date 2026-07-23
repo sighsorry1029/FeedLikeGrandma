@@ -454,7 +454,7 @@ internal static class TamingOrbSystem
         long nowTicks = ZNet.instance.GetTime().Ticks;
         long lastFedTicks = zdo.GetLong(ZDOVars.s_tameLastFeeding, 0L);
         long spawnTicks = zdo.GetLong(ZDOVars.s_spawnTime, 0L);
-        CaptureCllcApiPayload(character, out string cllcInfusion, out string cllcExtraEffect);
+        CaptureCllcModifiers(character, out string cllcInfusion, out string cllcExtraEffect);
 
         return new CapturedTamePayload
         {
@@ -519,7 +519,7 @@ internal static class TamingOrbSystem
         character.SetLevel(Mathf.Max(1, payload.Level));
         character.SetMaxHealth(Mathf.Max(1f, payload.MaxHealth));
         character.SetHealth(Mathf.Clamp(payload.Health, 1f, Mathf.Max(1f, payload.MaxHealth)));
-        RestoreCllcApiPayload(payload, character);
+        RestoreCllcModifiers(character, payload.CllcInfusion, payload.CllcExtraEffect);
 
         if (tameable != null)
         {
@@ -593,7 +593,7 @@ internal static class TamingOrbSystem
         return true;
     }
 
-    private static void CaptureCllcApiPayload(Character character, out string infusion, out string extraEffect)
+    internal static void CaptureCllcModifiers(Character character, out string infusion, out string extraEffect)
     {
         infusion = string.Empty;
         extraEffect = string.Empty;
@@ -615,15 +615,15 @@ internal static class TamingOrbSystem
         }
     }
 
-    private static void RestoreCllcApiPayload(CapturedTamePayload payload, Character character)
+    internal static void RestoreCllcModifiers(Character character, string infusion, string extraEffect)
     {
         if (character == null || !TryResolveCllcApi())
         {
             return;
         }
 
-        TrySetCllcEnum(_cllcSetInfusionCreature, _cllcInfusionType, character, payload.CllcInfusion, "infusion");
-        TrySetCllcEnum(_cllcSetExtraEffectCreature, _cllcExtraEffectType, character, payload.CllcExtraEffect, "extra effect");
+        TrySetCllcEnum(_cllcSetInfusionCreature, _cllcInfusionType, character, infusion, "infusion");
+        TrySetCllcEnum(_cllcSetExtraEffectCreature, _cllcExtraEffectType, character, extraEffect, "extra effect");
     }
 
     private static void TrySetCllcEnum(MethodInfo? method, Type? enumType, Character character, string value, string label)
