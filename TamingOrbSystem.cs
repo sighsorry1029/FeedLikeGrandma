@@ -119,11 +119,7 @@ internal static class TamingOrbSystem
         }
 
         objectDb.m_recipes.RemoveAll(recipe => recipe != null && recipe.name == RecipeName);
-        if (!IsEnabled())
-        {
-            return;
-        }
-
+        // Existing orbs must remain loadable even when crafting is disabled.
         GameObject? prefab = EnsurePrefab(objectDb);
         if ((object?)prefab == null)
         {
@@ -136,7 +132,10 @@ internal static class TamingOrbSystem
             RegisterWithZNetScene(ZNetScene.instance, prefab);
         }
 
-        RegisterRecipe(objectDb, prefab);
+        if (IsEnabled())
+        {
+            RegisterRecipe(objectDb, prefab);
+        }
     }
 
     internal static bool TryHandleTameableUseItem(Tameable tameable, Humanoid user, ItemDrop.ItemData item)

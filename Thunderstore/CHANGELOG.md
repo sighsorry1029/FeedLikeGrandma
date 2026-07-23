@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3
+
+- Kept the Taming Orb prefab registered when its recipe is disabled, preserving stored orbs across dedicated-server restarts.
+
 ## 1.0.2
 
 - Fixed dedicated-server manual feeding so nearby players can feed creatures regardless of creature network ownership.
