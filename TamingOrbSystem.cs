@@ -16,7 +16,6 @@ internal static class TamingOrbSystem
 
     private const string RecipeName = "Recipe_FLG_TamingOrb";
     private const string PayloadKey = "flg.tame.payload";
-    private const string PayloadIconPrefabKey = "flg.tame.icon_prefab";
     private const int PayloadVersion = 3;
     private const string DefaultSourcePrefabName = "DragonTear";
     private const string CllcEffectKey = "CL&LC effect";
@@ -43,14 +42,6 @@ internal static class TamingOrbSystem
     private static readonly HashSet<ItemDrop.ItemData.SharedData> NonTamingOrbSharedData = new();
     private static readonly int OdinHorseHaveArmorHash = OdinHorseHaveArmorKey.GetStableHashCode();
     private static readonly int OdinHorseSetArmorRpcHash = "SetArmor".GetStableHashCode();
-    private static bool _cllcApiResolved;
-    private static bool _cllcApiAvailable;
-    private static Type? _cllcInfusionType;
-    private static Type? _cllcExtraEffectType;
-    private static MethodInfo? _cllcGetInfusionCreature;
-    private static MethodInfo? _cllcGetExtraEffectCreature;
-    private static MethodInfo? _cllcSetInfusionCreature;
-    private static MethodInfo? _cllcSetExtraEffectCreature;
     private static readonly int ColorProperty = Shader.PropertyToID("_Color");
     private static readonly int TintColorProperty = Shader.PropertyToID("_TintColor");
     private static readonly int EmissionColorProperty = Shader.PropertyToID("_EmissionColor");
@@ -308,26 +299,100 @@ internal static class TamingOrbSystem
 
     private static bool CompleteCapture(Player player, Tameable tameable, Character character, ZNetView nview, ItemDrop.ItemData item, string creaturePrefabName)
     {
-        if (player == null || !player.GetInventory().ContainsItem(item))
+        if (player == null)
         {
             return false;
         }
 
-        if (character == null || tameable == null || nview == null || !nview.IsValid() || character.IsDead() || !character.IsTamed())
+        Inventory inventory = player.GetInventory();
+        if (!inventory.ContainsItem(item))
+        {
+            return false;
+        }
+
+        if (character == null ||
+            tameable == null ||
+            nview == null ||
+            !nview.IsValid() ||
+            character.IsDead() ||
+            !character.IsTamed() ||
+            Vector3.Distance(player.transform.position, ((Component)character).transform.position) > CaptureRange)
         {
             FeedLocalization.Message(player, "$flg_taming_orb_no_longer_capturable");
             return false;
         }
 
-        CapturedTamePayload payload = CapturePayload(character, tameable, nview, creaturePrefabName);
-        item.m_stack = 1;
-        item.m_customData[PayloadKey] = payload.Serialize();
-        item.m_customData[PayloadIconPrefabKey] = payload.Prefab;
-        item.m_variant = GetIconVariantForPayload(item, payload);
-        player.GetInventory().Changed();
+        CapturedTamePayload payload;
+        string serializedPayload;
+        int iconVariant = 0;
+        try
+        {
+            payload = CapturePayload(character, tameable, nview, creaturePrefabName);
+            serializedPayload = payload.Serialize();
+            try
+            {
+                iconVariant = GetIconVariantForPayload(item, payload);
+            }
+            catch (Exception ex)
+            {
+                FeedLikeGrandmaPlugin.Log.LogDebug(
+                    $"Could not prepare {PrefabName} icon for {creaturePrefabName}: {ex.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            FeedLikeGrandmaPlugin.Log.LogWarning(
+                $"{PrefabName} failed to prepare capture data for {creaturePrefabName}: {ex.Message}");
+            FeedLocalization.Message(player, "$flg_taming_orb_cannot_capture");
+            return false;
+        }
+
+        if (!inventory.ContainsItem(item) ||
+            !nview.IsValid() ||
+            character.IsDead() ||
+            !character.IsTamed())
+        {
+            FeedLocalization.Message(player, "$flg_taming_orb_no_longer_capturable");
+            return false;
+        }
 
         nview.ClaimOwnership();
-        nview.Destroy();
+        if (!nview.IsOwner())
+        {
+            FeedLocalization.Message(player, "$flg_taming_orb_no_longer_capturable");
+            return false;
+        }
+
+        int previousStack = item.m_stack;
+        int previousVariant = item.m_variant;
+        bool hadPreviousPayload = item.m_customData.TryGetValue(PayloadKey, out string? previousPayload);
+        try
+        {
+            item.m_stack = 1;
+            item.m_customData[PayloadKey] = serializedPayload;
+            item.m_variant = iconVariant;
+            inventory.Changed();
+            nview.Destroy();
+        }
+        catch (Exception ex)
+        {
+            item.m_stack = previousStack;
+            item.m_variant = previousVariant;
+            if (hadPreviousPayload)
+            {
+                item.m_customData[PayloadKey] = previousPayload!;
+            }
+            else
+            {
+                item.m_customData.Remove(PayloadKey);
+            }
+
+            inventory.Changed();
+            FeedLikeGrandmaPlugin.Log.LogWarning(
+                $"{PrefabName} failed to commit capture for {creaturePrefabName}: {ex.Message}");
+            FeedLocalization.Message(player, "$flg_taming_orb_cannot_capture");
+            return false;
+        }
 
         FeedLocalization.Message(player, "$flg_taming_orb_captured", GetPayloadDisplayName(payload));
         return true;
@@ -411,7 +476,6 @@ internal static class TamingOrbSystem
 
             RestorePayload(payload, character, tameable, nview);
             item.m_customData.Remove(PayloadKey);
-            item.m_customData.Remove(PayloadIconPrefabKey);
             item.m_variant = 0;
             player.GetInventory().Changed();
 
@@ -454,7 +518,7 @@ internal static class TamingOrbSystem
         long nowTicks = ZNet.instance.GetTime().Ticks;
         long lastFedTicks = zdo.GetLong(ZDOVars.s_tameLastFeeding, 0L);
         long spawnTicks = zdo.GetLong(ZDOVars.s_spawnTime, 0L);
-        CaptureCllcModifiers(character, out string cllcInfusion, out string cllcExtraEffect);
+        FeedCreatureModifierCompatibility.CaptureCllcModifiers(character, out string cllcInfusion, out string cllcExtraEffect);
 
         return new CapturedTamePayload
         {
@@ -519,7 +583,7 @@ internal static class TamingOrbSystem
         character.SetLevel(Mathf.Max(1, payload.Level));
         character.SetMaxHealth(Mathf.Max(1f, payload.MaxHealth));
         character.SetHealth(Mathf.Clamp(payload.Health, 1f, Mathf.Max(1f, payload.MaxHealth)));
-        RestoreCllcModifiers(character, payload.CllcInfusion, payload.CllcExtraEffect);
+        FeedCreatureModifierCompatibility.RestoreCllcModifiers(character, payload.CllcInfusion, payload.CllcExtraEffect);
 
         if (tameable != null)
         {
@@ -591,133 +655,6 @@ internal static class TamingOrbSystem
 
         saddle = componentSaddle;
         return true;
-    }
-
-    internal static void CaptureCllcModifiers(Character character, out string infusion, out string extraEffect)
-    {
-        infusion = string.Empty;
-        extraEffect = string.Empty;
-        if (character == null || !TryResolveCllcApi())
-        {
-            return;
-        }
-
-        try
-        {
-            infusion = _cllcGetInfusionCreature?.Invoke(null, new object[] { character })?.ToString() ?? string.Empty;
-            extraEffect = _cllcGetExtraEffectCreature?.Invoke(null, new object[] { character })?.ToString() ?? string.Empty;
-        }
-        catch (Exception ex)
-        {
-            FeedLikeGrandmaPlugin.Log.LogDebug($"Could not capture CL&LC data for {character.name}: {ex.Message}");
-            infusion = string.Empty;
-            extraEffect = string.Empty;
-        }
-    }
-
-    internal static void RestoreCllcModifiers(Character character, string infusion, string extraEffect)
-    {
-        if (character == null || !TryResolveCllcApi())
-        {
-            return;
-        }
-
-        TrySetCllcEnum(_cllcSetInfusionCreature, _cllcInfusionType, character, infusion, "infusion");
-        TrySetCllcEnum(_cllcSetExtraEffectCreature, _cllcExtraEffectType, character, extraEffect, "extra effect");
-    }
-
-    private static void TrySetCllcEnum(MethodInfo? method, Type? enumType, Character character, string value, string label)
-    {
-        if (method == null || enumType == null || string.IsNullOrWhiteSpace(value))
-        {
-            return;
-        }
-
-        try
-        {
-            object enumValue = Enum.Parse(enumType, value, ignoreCase: true);
-            method.Invoke(null, new[] { character, enumValue });
-        }
-        catch (Exception ex)
-        {
-            FeedLikeGrandmaPlugin.Log.LogDebug($"Could not restore CL&LC {label} '{value}' for {character.name}: {ex.Message}");
-        }
-    }
-
-    private static bool TryResolveCllcApi()
-    {
-        if (_cllcApiResolved)
-        {
-            return _cllcApiAvailable;
-        }
-
-        _cllcApiResolved = true;
-        try
-        {
-            Assembly? assembly = AppDomain.CurrentDomain
-                .GetAssemblies()
-                .FirstOrDefault(loaded => loaded.GetName().Name == "CreatureLevelControl");
-            Type? apiType = assembly?.GetType("CreatureLevelControl.API");
-            _cllcInfusionType = assembly?.GetType("CreatureLevelControl.CreatureInfusion");
-            _cllcExtraEffectType = assembly?.GetType("CreatureLevelControl.CreatureExtraEffect");
-
-            if (apiType == null || _cllcInfusionType == null || _cllcExtraEffectType == null)
-            {
-                _cllcApiAvailable = false;
-                return false;
-            }
-
-            _cllcGetInfusionCreature = FindCllcGetter(apiType, "GetInfusionCreature");
-            _cllcGetExtraEffectCreature = FindCllcGetter(apiType, "GetExtraEffectCreature");
-            _cllcSetInfusionCreature = FindCllcSetter(apiType, "SetInfusionCreature", _cllcInfusionType);
-            _cllcSetExtraEffectCreature = FindCllcSetter(apiType, "SetExtraEffectCreature", _cllcExtraEffectType);
-            _cllcApiAvailable =
-                _cllcGetInfusionCreature != null &&
-                _cllcGetExtraEffectCreature != null &&
-                _cllcSetInfusionCreature != null &&
-                _cllcSetExtraEffectCreature != null;
-            return _cllcApiAvailable;
-        }
-        catch (Exception ex)
-        {
-            FeedLikeGrandmaPlugin.Log.LogDebug($"Could not resolve CL&LC API: {ex.Message}");
-            _cllcApiAvailable = false;
-            return false;
-        }
-    }
-
-    private static MethodInfo? FindCllcGetter(Type apiType, string name)
-    {
-        return apiType
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .FirstOrDefault(method =>
-            {
-                if (method.Name != name)
-                {
-                    return false;
-                }
-
-                ParameterInfo[] parameters = method.GetParameters();
-                return parameters.Length == 1 && parameters[0].ParameterType.IsAssignableFrom(typeof(Character));
-            });
-    }
-
-    private static MethodInfo? FindCllcSetter(Type apiType, string name, Type enumType)
-    {
-        return apiType
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .FirstOrDefault(method =>
-            {
-                if (method.Name != name)
-                {
-                    return false;
-                }
-
-                ParameterInfo[] parameters = method.GetParameters();
-                return parameters.Length == 2 &&
-                       parameters[0].ParameterType.IsAssignableFrom(typeof(Character)) &&
-                       parameters[1].ParameterType == enumType;
-            });
     }
 
     private static void RestoreOdinHorseArmor(CapturedTamePayload payload, Tameable tameable, ZNetView nview, ZDO zdo)
@@ -927,29 +864,24 @@ internal static class TamingOrbSystem
 
         if (!item.m_customData.ContainsKey(PayloadKey))
         {
-            item.m_customData.Remove(PayloadIconPrefabKey);
             item.m_variant = 0;
             return;
         }
 
         if (!TryReadPayload(item, out CapturedTamePayload? payload, logWarnings: false))
         {
-            item.m_customData.Remove(PayloadIconPrefabKey);
             item.m_variant = 0;
             return;
         }
 
         string payloadPrefabName = payload!.Prefab;
-        if (item.m_customData.TryGetValue(PayloadIconPrefabKey, out string iconPrefabName) &&
-            iconPrefabName.Equals(payloadPrefabName, StringComparison.OrdinalIgnoreCase) &&
-            TryGetCreatureIconVariant(item.m_shared, payloadPrefabName, out int expectedVariant) &&
+        if (TryGetCreatureIconVariant(item.m_shared, payloadPrefabName, out int expectedVariant) &&
             item.m_variant == expectedVariant &&
             IsIconVariantValid(item.m_shared, expectedVariant))
         {
             return;
         }
 
-        item.m_customData[PayloadIconPrefabKey] = payloadPrefabName;
         item.m_variant = GetIconVariantForPayload(item, payload);
     }
 
@@ -1192,7 +1124,7 @@ internal static class TamingOrbSystem
     {
         string safeName = SanitizeCacheFileName(creaturePrefabName);
         uint hash = unchecked((uint)creaturePrefabName.GetStableHashCode());
-        return Path.Combine(GetCreatureIconCacheDirectory(), $"{safeName}-{hash:X8}-{FeedLikeGrandmaPlugin.ModVersion}-{IconCacheRevision}.flgicon");
+        return Path.Combine(GetCreatureIconCacheDirectory(), $"{safeName}-{hash:X8}-{IconCacheRevision}.flgicon");
     }
 
     private static string SanitizeCacheFileName(string name)

@@ -1,5 +1,6 @@
 using HarmonyLib;
 using UnityEngine;
+using Exception = System.Exception;
 
 namespace FeedLikeGrandma;
 
@@ -85,10 +86,11 @@ internal static class FeedRidingSystem
         staminaCost *= Mathf.Max(0f, multiplier);
     }
 
-    internal static StaminaRegenState ApplyStaminaRegenMultiplier(Sadle saddle)
+    internal static void ApplyStaminaRegenMultiplier(Sadle saddle, ref StaminaRegenState state)
     {
-        StaminaRegenState state = new()
+        state = new StaminaRegenState
         {
+            Applied = true,
             Regen = saddle.m_staminaRegen,
             RegenHungry = saddle.m_staminaRegenHungry
         };
@@ -102,11 +104,15 @@ internal static class FeedRidingSystem
         multiplier = Mathf.Max(0f, multiplier) * skillMultiplier;
         saddle.m_staminaRegen *= multiplier;
         saddle.m_staminaRegenHungry *= multiplier;
-        return state;
     }
 
     internal static void RestoreStaminaRegen(Sadle saddle, StaminaRegenState state)
     {
+        if (!state.Applied || (object?)saddle == null)
+        {
+            return;
+        }
+
         saddle.m_staminaRegen = state.Regen;
         saddle.m_staminaRegenHungry = state.RegenHungry;
     }
@@ -128,6 +134,7 @@ internal static class FeedRidingSystem
 
     internal readonly struct StaminaRegenState
     {
+        internal bool Applied { get; init; }
         internal float Regen { get; init; }
         internal float RegenHungry { get; init; }
     }
@@ -156,12 +163,16 @@ internal static class SaddleUpdateStaminaPatch
 {
     private static void Prefix(Sadle __instance, ref FeedRidingSystem.StaminaRegenState __state)
     {
-        __state = FeedRidingSystem.ApplyStaminaRegenMultiplier(__instance);
+        FeedRidingSystem.ApplyStaminaRegenMultiplier(__instance, ref __state);
     }
 
-    private static void Postfix(Sadle __instance, FeedRidingSystem.StaminaRegenState __state)
+    private static Exception? Finalizer(
+        Sadle __instance,
+        FeedRidingSystem.StaminaRegenState __state,
+        Exception? __exception)
     {
         FeedRidingSystem.RestoreStaminaRegen(__instance, __state);
+        return __exception;
     }
 }
 

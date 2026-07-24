@@ -63,8 +63,6 @@ internal static class FeedBetterRidingCompatibility
 
     internal static bool HasBetterRiding => BetterRidingPluginType != null;
 
-    internal static bool HasBetterRidingMountStaminaSystem => MountStaminaSystemType != null;
-
     internal static void Shutdown()
     {
         LastAttackTimes.Clear();

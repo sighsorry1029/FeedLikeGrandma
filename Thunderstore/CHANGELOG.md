@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.5
+
+- Hardened dedicated-server manual feeding with owner-side distance and TamingBoost validation, plus bounded duplicate-request protection.
+- Made explicit empty `consumeItems` overrides distinct from omitted fields and consolidated food-entry parsing.
+- Guaranteed mount stamina regeneration settings are restored even when another riding patch throws.
+- Made Taming Orb capture prepare payloads and icons before committing, with item-state rollback on capture failure.
+- Reduced core-system complexity by separating hover HUD, horizontal procreation tracking, and creature-modifier compatibility while centralizing runtime refreshes.
+- Reused Taming Orb creature icon caches across mod updates and removed redundant per-item icon metadata.
+
 ## 1.0.4
 
 - Preserved CL&LC infusion and extra effects when tamed creatures level up or grow, preventing effect rerolls.

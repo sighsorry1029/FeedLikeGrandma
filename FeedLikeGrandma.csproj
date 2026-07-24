@@ -128,10 +128,13 @@
         <Compile Include="FeedBarrelSystem.cs"/>
         <Compile Include="FeedBetterRidingCompatibility.cs"/>
         <Compile Include="FeedConfig.cs"/>
+        <Compile Include="FeedCreatureModifierCompatibility.cs"/>
         <Compile Include="FeedDragonFlightRestrictionSystem.cs"/>
         <Compile Include="FeedExternalReferenceSupport.cs"/>
+        <Compile Include="FeedHoverHud.cs"/>
         <Compile Include="FeedMonstrumCompatibility.cs"/>
         <Compile Include="FeedPatches.cs"/>
+        <Compile Include="FeedProcreationSystem.cs"/>
         <Compile Include="FeedLocalization.cs"/>
         <Compile Include="FeedReferenceSections.cs"/>
         <Compile Include="FeedReferenceWriter.cs"/>

@@ -45,7 +45,7 @@ internal static class ZNetViewAwakePatch
 {
     private static void Postfix(ZNetView __instance)
     {
-        FeedSystem.RegisterSpawnedInstance(__instance);
+        FeedProcreationSystem.RegisterSpawnedInstance(__instance);
     }
 }
 
@@ -54,7 +54,8 @@ internal static class ZNetViewOnDestroyPatch
 {
     private static void Prefix(ZNetView __instance)
     {
-        FeedSystem.DeregisterSpawnedInstance(__instance);
+        FeedProcreationSystem.DeregisterSpawnedInstance(__instance);
+        FeedSystem.DeregisterView(__instance);
     }
 }
 
@@ -469,7 +470,7 @@ internal static class ProcreationProcreatePatch
 {
     private static bool Prefix(Procreation __instance)
     {
-        return FeedSystem.ShouldRunProcreation(__instance);
+        return FeedProcreationSystem.ShouldRunProcreation(__instance);
     }
 }
 

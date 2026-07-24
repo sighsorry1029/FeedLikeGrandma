@@ -32,7 +32,7 @@ internal enum RuntimeRefreshFlags
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.0.4";
+    internal const string ModVersion = "1.0.5";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -133,7 +133,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
 
         FeedConsoleCommands.Register();
-        FeedSystem.LoadYamlText(File.ReadAllText(YamlFileFullPath), "local fallback");
+        LoadAndRefreshFeedRules(File.ReadAllText(YamlFileFullPath), "local fallback");
 
         _ = ConfigSync.AddLockingConfigEntry(ServerConfigLocked);
 
@@ -180,7 +180,10 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         FeedDragonFlightRestrictionSystem.Shutdown();
         FeedRidingSystem.Shutdown();
         FeedAutoFeedSystem.Shutdown();
+        FeedProcreationSystem.Shutdown();
         FeedSystem.Shutdown();
+        FeedHoverHud.Shutdown();
+        FeedCreatureModifierCompatibility.Shutdown();
         FeedReferenceWriter.Shutdown();
         FeedExternalReferenceSupport.Shutdown();
         _yamlWatcher?.Dispose();
@@ -505,7 +508,9 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
     private void OnSyncedYamlChanged()
     {
-        FeedSystem.LoadYamlText(SyncedYaml.Value ?? string.Empty, ConfigSync.IsSourceOfTruth ? "local sync" : "server sync");
+        LoadAndRefreshFeedRules(
+            SyncedYaml.Value ?? string.Empty,
+            ConfigSync.IsSourceOfTruth ? "local sync" : "server sync");
     }
 
     private void OnSourceOfTruthChanged(bool isSourceOfTruth)
@@ -516,8 +521,24 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         }
         else if (!string.IsNullOrWhiteSpace(SyncedYaml.Value))
         {
-            FeedSystem.LoadYamlText(SyncedYaml.Value, "server sync");
+            LoadAndRefreshFeedRules(SyncedYaml.Value, "server sync");
         }
+    }
+
+    private static void LoadAndRefreshFeedRules(string yamlText, string source)
+    {
+        if (FeedSystem.LoadYamlText(yamlText, source))
+        {
+            RefreshFeedRuleRuntime();
+        }
+    }
+
+    private static void RefreshFeedRuleRuntime()
+    {
+        FeedProcreationSystem.ResetRuntimeCache();
+        FeedSystem.RebuildRuntimeData();
+        FeedDragonFlightRestrictionSystem.OnRulesChanged();
+        RefreshGeneratedFilesIfNeeded();
     }
 
     internal static float GetTamingBoostMultiplier()
@@ -572,7 +593,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
             if ((refresh & RuntimeRefreshFlags.FeedRules) != 0)
             {
-                TryRefreshRuntime("feed rule rebuild", FeedSystem.RebuildRuntimeData);
+                TryRefreshRuntime("feed rule rebuild", RefreshFeedRuleRuntime);
             }
 
             if (_pendingRuntimeRefresh == RuntimeRefreshFlags.None)

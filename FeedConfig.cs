@@ -20,7 +20,6 @@ internal sealed class RawFoodEntry
     public string PrefabName { get; init; } = string.Empty;
     public int? RequiredQuality { get; init; }
     public float? Value { get; init; }
-    public bool DefaultToOne { get; init; }
 }
 
 internal sealed class RawFeedValues
@@ -72,10 +71,10 @@ internal sealed class RawFeedingRule
     public RawGrowValues? Grow { get; set; }
     public RawEggGrowValues? EggGrow { get; set; }
     public RawMountStaminaValues? MountStamina { get; set; }
+    public bool HasConsumeItemsOverride { get; set; }
     public bool HasRestrictedBiomeOverride { get; set; }
     public List<string> RestrictedBiomes { get; } = new();
     public List<RawFoodEntry> Foods { get; } = new();
-    public List<string> ConsumeItems { get; } = new();
     public Dictionary<int, List<RawFoodEntry>> LevelUpItems { get; } = new();
 }
 
@@ -201,6 +200,7 @@ internal static class FeedingYamlParser
                     rule.Feed = ParseFeedValues(entry.Value, $"{prefabName}.feed", warnings);
                     break;
                 case "consumeitems":
+                    rule.HasConsumeItemsOverride = true;
                     ParseConsumeItems(rule, entry.Value, warnings);
                     break;
                 case "levelupitems":
@@ -241,11 +241,20 @@ internal static class FeedingYamlParser
 
     private static void ParseConsumeItems(RawFeedingRule rule, YamlNode node, List<string> warnings)
     {
+        ParseFoodEntries(rule.Foods, rule.PrefabName, node, warnings);
+    }
+
+    private static void ParseFoodEntries(
+        List<RawFoodEntry> foods,
+        string context,
+        YamlNode node,
+        List<string> warnings)
+    {
         if (node is YamlSequenceNode sequence)
         {
             foreach (YamlNode itemNode in sequence.Children)
             {
-                AddConsumeItemEntry(rule, itemNode, warnings);
+                AddFoodEntry(foods, context, itemNode, warnings);
             }
 
             return;
@@ -253,17 +262,26 @@ internal static class FeedingYamlParser
 
         foreach (string item in ParseStringList(node))
         {
-            AddConsumeItemEntry(rule, item, node, warnings);
+            AddFoodEntry(foods, context, item, node, warnings);
         }
     }
 
-    private static void AddConsumeItemEntry(RawFeedingRule rule, YamlNode node, List<string> warnings)
+    private static void AddFoodEntry(
+        List<RawFoodEntry> foods,
+        string context,
+        YamlNode node,
+        List<string> warnings)
     {
         if (node is YamlMappingNode mapping && mapping.Children.Count == 1)
         {
             KeyValuePair<YamlNode, YamlNode> pair = mapping.Children.First();
-            AddFoodEntry(rule, ReadScalar(pair.Key).Trim(), ReadScalar(pair.Value).Trim(), defaultToOne: true, node, warnings);
-            AddConsumeItem(rule, ReadScalar(pair.Key).Trim(), node, warnings);
+            AddFoodEntry(
+                foods,
+                context,
+                ReadScalar(pair.Key).Trim(),
+                ReadScalar(pair.Value).Trim(),
+                node,
+                warnings);
             return;
         }
 
@@ -272,16 +290,20 @@ internal static class FeedingYamlParser
             List<string> parts = sequence.Children.Select(child => ReadScalar(child).Trim()).ToList();
             if (parts.Count >= 2)
             {
-                AddFoodEntry(rule, parts[0], parts[1], defaultToOne: true, node, warnings);
-                AddConsumeItem(rule, parts[0], node, warnings);
+                AddFoodEntry(foods, context, parts[0], parts[1], node, warnings);
                 return;
             }
         }
 
-        AddConsumeItemEntry(rule, ReadScalar(node).Trim(), node, warnings);
+        AddFoodEntry(foods, context, ReadScalar(node).Trim(), node, warnings);
     }
 
-    private static void AddConsumeItemEntry(RawFeedingRule rule, string entryText, YamlNode node, List<string> warnings)
+    private static void AddFoodEntry(
+        List<RawFoodEntry> foods,
+        string context,
+        string entryText,
+        YamlNode node,
+        List<string> warnings)
     {
         string foodName;
         string? valueText = null;
@@ -295,16 +317,10 @@ internal static class FeedingYamlParser
             foodName = Unquote(entryText).Trim();
         }
 
-        AddFoodEntry(rule, foodName, valueText, defaultToOne: true, node, warnings);
-        AddConsumeItem(rule, foodName, node, warnings);
+        AddFoodEntry(foods, context, foodName, valueText, node, warnings);
     }
 
-    private static void AddFoodEntry(RawFeedingRule rule, string foodName, string? valueText, bool defaultToOne, YamlNode node, List<string> warnings)
-    {
-        AddFoodEntry(rule.Foods, rule.PrefabName, foodName, valueText, defaultToOne, node, warnings);
-    }
-
-    private static void AddFoodEntry(List<RawFoodEntry> foods, string ruleName, string foodName, string? valueText, bool defaultToOne, YamlNode node, List<string> warnings)
+    private static void AddFoodEntry(List<RawFoodEntry> foods, string ruleName, string foodName, string? valueText, YamlNode node, List<string> warnings)
     {
         if (string.IsNullOrWhiteSpace(foodName))
         {
@@ -336,30 +352,8 @@ internal static class FeedingYamlParser
         {
             PrefabName = prefabName,
             RequiredQuality = requiredQuality,
-            Value = value,
-            DefaultToOne = defaultToOne
+            Value = value
         });
-    }
-
-    private static void AddConsumeItem(RawFeedingRule rule, string foodName, YamlNode node, List<string> warnings)
-    {
-        if (string.IsNullOrWhiteSpace(foodName))
-        {
-            return;
-        }
-
-        if (!TryParseFoodToken(foodName, node, warnings, out string prefabName, out _))
-        {
-            return;
-        }
-
-        int existingIndex = rule.ConsumeItems.FindIndex(entry => entry.Equals(prefabName, StringComparison.OrdinalIgnoreCase));
-        if (existingIndex >= 0)
-        {
-            return;
-        }
-
-        rule.ConsumeItems.Add(prefabName);
     }
 
     private static void ParseLevelUpItems(RawFeedingRule rule, YamlNode node, string context, List<string> warnings)
@@ -374,20 +368,7 @@ internal static class FeedingYamlParser
         {
             int currentLevel = Math.Max(1, ParseInt(entry.Key, $"{context}.level", warnings));
             List<RawFoodEntry> foods = new();
-            if (entry.Value is YamlSequenceNode sequence)
-            {
-                foreach (YamlNode itemNode in sequence.Children)
-                {
-                    AddLevelUpConsumeItemEntry(foods, $"{rule.PrefabName}.levelUpItems.{currentLevel}", itemNode, warnings);
-                }
-            }
-            else
-            {
-                foreach (string item in ParseStringList(entry.Value))
-                {
-                    AddLevelUpConsumeItemEntry(foods, $"{rule.PrefabName}.levelUpItems.{currentLevel}", item, entry.Value, warnings);
-                }
-            }
+            ParseFoodEntries(foods, $"{rule.PrefabName}.levelUpItems.{currentLevel}", entry.Value, warnings);
 
             if (rule.LevelUpItems.ContainsKey(currentLevel))
             {
@@ -396,45 +377,6 @@ internal static class FeedingYamlParser
 
             rule.LevelUpItems[currentLevel] = foods;
         }
-    }
-
-    private static void AddLevelUpConsumeItemEntry(List<RawFoodEntry> foods, string context, YamlNode node, List<string> warnings)
-    {
-        if (node is YamlMappingNode mapping && mapping.Children.Count == 1)
-        {
-            KeyValuePair<YamlNode, YamlNode> pair = mapping.Children.First();
-            AddFoodEntry(foods, context, ReadScalar(pair.Key).Trim(), ReadScalar(pair.Value).Trim(), defaultToOne: true, node, warnings);
-            return;
-        }
-
-        if (node is YamlSequenceNode sequence)
-        {
-            List<string> parts = sequence.Children.Select(child => ReadScalar(child).Trim()).ToList();
-            if (parts.Count >= 2)
-            {
-                AddFoodEntry(foods, context, parts[0], parts[1], defaultToOne: true, node, warnings);
-                return;
-            }
-        }
-
-        AddLevelUpConsumeItemEntry(foods, context, ReadScalar(node).Trim(), node, warnings);
-    }
-
-    private static void AddLevelUpConsumeItemEntry(List<RawFoodEntry> foods, string context, string entryText, YamlNode node, List<string> warnings)
-    {
-        string foodName;
-        string? valueText = null;
-        if (TrySplitCommaValue(entryText, out string splitName, out string splitValue))
-        {
-            foodName = Unquote(splitName).Trim();
-            valueText = splitValue;
-        }
-        else
-        {
-            foodName = Unquote(entryText).Trim();
-        }
-
-        AddFoodEntry(foods, context, foodName, valueText, defaultToOne: true, node, warnings);
     }
 
     private static void ParseFoodNumbers(Dictionary<string, float> foodNumbers, YamlNode node, string context, List<string> warnings)

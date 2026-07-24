@@ -2,10 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Reflection;
-using TMPro;
 using UnityEngine;
-using UnityEngine.UI;
 
 namespace FeedLikeGrandma;
 
@@ -27,96 +24,28 @@ internal static class FeedSystem
     private static readonly int FeedCooldownHash = StringExtensionMethods.GetStableHashCode("flg_feed_cooldown");
 
     private const float MeadBoostRange = 60f;
-    private const float HoverFoodIconSpacing = 6f;
-    private const float HoverFoodIconOffsetY = 6f;
     private const string FeedRequestRpc = "FLG_FeedRequest";
     private const string FeedResponseRpc = "FLG_FeedResponse";
     private const string TamedProgressionEffectPrefab = "fx_creature_tamed";
     private const long PendingRequestTimeoutTicks = TimeSpan.TicksPerSecond * 30;
+    private const long CompletedRequestRetentionTicks = TimeSpan.TicksPerSecond * 60;
+    private const int MaxCompletedRequestCacheEntries = 1024;
+    private const float FeedRequestDistanceTolerance = 1f;
 
     private static readonly Dictionary<string, RawFeedingRule> RawRules = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, float> FoodNumbers = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, ResolvedFeedingRule> ResolvedRules = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<int, PendingFeedRequest> PendingRequests = new();
-    private static readonly HashSet<int> ProcreationInstancePrefabHashes = new();
-    private static readonly Dictionary<int, HashSet<ZNetView>> ProcreationInstanceCache = new();
+    private static readonly Dictionary<(long Sender, int RequestId), CompletedFeedRequest> CompletedFeedRequests = new();
     private static readonly HashSet<int> RegisteredTargetViews = new();
     private static readonly HashSet<int> RegisteredPlayerViews = new();
     private static readonly List<Player> NearbyTamingBoostPlayers = new();
-    private static bool _creatureManagerModifierApiResolved;
-    private static MethodInfo? _creatureManagerInheritModifiers;
-    private static TMP_FontAsset? CachedHudFont;
     private static readonly HashSet<string> ExcludedPrefabNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Placeable_HardRock",
         "Player"
     };
 
-    private static void ApplyHudFont(TMP_Text target, TMP_Text? preferred = null)
-    {
-        if (preferred != null && preferred.font != null)
-        {
-            target.font = preferred.font;
-            if (preferred.fontSharedMaterial != null)
-            {
-                target.fontSharedMaterial = preferred.fontSharedMaterial;
-            }
-
-            return;
-        }
-
-        TMP_FontAsset? font = ResolveHudFont();
-        if (font != null)
-        {
-            target.font = font;
-        }
-    }
-
-    private static TMP_FontAsset? ResolveHudFont()
-    {
-        if (CachedHudFont != null)
-        {
-            return CachedHudFont;
-        }
-
-        if (Hud.instance != null && Hud.instance.m_hoverName != null && Hud.instance.m_hoverName.font != null)
-        {
-            return CachedHudFont = Hud.instance.m_hoverName.font;
-        }
-
-        foreach (TMP_FontAsset font in Resources.FindObjectsOfTypeAll<TMP_FontAsset>())
-        {
-            if (font != null && font.name == "Valheim-AveriaSansLibre")
-            {
-                return CachedHudFont = font;
-            }
-        }
-
-        if (TMP_Settings.defaultFontAsset != null)
-        {
-            return CachedHudFont = TMP_Settings.defaultFontAsset;
-        }
-
-        foreach (TMP_Text text in Resources.FindObjectsOfTypeAll<TMP_Text>())
-        {
-            if (text != null && text.font != null)
-            {
-                return CachedHudFont = text.font;
-            }
-        }
-
-        foreach (TMP_FontAsset font in Resources.FindObjectsOfTypeAll<TMP_FontAsset>())
-        {
-            if (font != null)
-            {
-                return CachedHudFont = font;
-            }
-        }
-
-        return null;
-    }
-
-    private static HoverFoodIconHud? _hoverHud;
     private static RawFeedValues FeedDefaults = new();
     private static int _nextRequestId = 1;
     private static int _hoverTextTargetId;
@@ -126,32 +55,22 @@ internal static class FeedSystem
     private static string _hoverTextLanguage = string.Empty;
     private static string _hoverTextResult = string.Empty;
 
-    internal static IReadOnlyDictionary<string, ResolvedFeedingRule> Rules => ResolvedRules;
-    internal static RawFeedValues CurrentDefaults => FeedDefaults;
-    internal static IReadOnlyDictionary<string, float> CurrentFoodNumbers => FoodNumbers;
-
     internal static void Shutdown()
     {
-        _hoverHud?.Destroy();
-        _hoverHud = null;
         RawRules.Clear();
         FoodNumbers.Clear();
         ResolvedRules.Clear();
         PendingRequests.Clear();
-        ProcreationInstancePrefabHashes.Clear();
-        ProcreationInstanceCache.Clear();
+        CompletedFeedRequests.Clear();
         RegisteredTargetViews.Clear();
         RegisteredPlayerViews.Clear();
         NearbyTamingBoostPlayers.Clear();
-        _creatureManagerModifierApiResolved = false;
-        _creatureManagerInheritModifiers = null;
-        CachedHudFont = null;
         FeedDefaults = new RawFeedValues();
         _nextRequestId = 1;
         InvalidateHoverTextCache();
     }
 
-    internal static void LoadYamlText(string yamlText, string source)
+    internal static bool LoadYamlText(string yamlText, string source)
     {
         List<string> warnings = new();
         RawFeedConfig parsedConfig;
@@ -163,7 +82,7 @@ internal static class FeedSystem
         catch (Exception ex)
         {
             FeedLikeGrandmaPlugin.Log.LogError($"Failed to parse YAML from {source}: {ex}");
-            return;
+            return false;
         }
 
         RawRules.Clear();
@@ -185,15 +104,13 @@ internal static class FeedSystem
             FeedLikeGrandmaPlugin.Log.LogWarning(warning);
         }
 
-        RebuildRuntimeData();
+        return true;
     }
 
     internal static void RebuildRuntimeData()
     {
         InvalidateHoverTextCache();
         ResolvedRules.Clear();
-        ProcreationInstancePrefabHashes.Clear();
-        ProcreationInstanceCache.Clear();
         if ((object)ObjectDB.instance == null || (object)ZNetScene.instance == null)
         {
             return;
@@ -252,29 +169,9 @@ internal static class FeedSystem
             }
         }
 
-        FeedDragonFlightRestrictionSystem.OnRulesChanged();
-        FeedLikeGrandmaPlugin.RefreshGeneratedFilesIfNeeded();
     }
 
-    internal static void RegisterSpawnedInstance(ZNetView? nview)
-    {
-        if (ProcreationInstancePrefabHashes.Count == 0 ||
-            !TryGetSpawnedInstancePrefabHash(nview, out int prefabHash) ||
-            !ProcreationInstancePrefabHashes.Contains(prefabHash))
-        {
-            return;
-        }
-
-        if (!ProcreationInstanceCache.TryGetValue(prefabHash, out HashSet<ZNetView>? instances))
-        {
-            instances = new HashSet<ZNetView>();
-            ProcreationInstanceCache[prefabHash] = instances;
-        }
-
-        instances.Add(nview!);
-    }
-
-    internal static void DeregisterSpawnedInstance(ZNetView? nview)
+    internal static void DeregisterView(ZNetView? nview)
     {
         if ((object?)nview == null)
         {
@@ -284,22 +181,6 @@ internal static class FeedSystem
         int instanceId = nview.GetInstanceID();
         RegisteredTargetViews.Remove(instanceId);
         RegisteredPlayerViews.Remove(instanceId);
-        if (ProcreationInstanceCache.Count == 0)
-        {
-            return;
-        }
-
-        if (TryGetSpawnedInstancePrefabHash(nview, out int prefabHash) &&
-            ProcreationInstanceCache.TryGetValue(prefabHash, out HashSet<ZNetView>? directInstances))
-        {
-            directInstances.Remove(nview);
-            return;
-        }
-
-        foreach (HashSet<ZNetView> instances in ProcreationInstanceCache.Values)
-        {
-            instances.Remove(nview);
-        }
     }
 
     private static GameObject? FindLoadedPrefab(string prefabName, IEnumerable<GameObject> loadedPrefabs)
@@ -343,7 +224,6 @@ internal static class FeedSystem
         RawFeedValues feedValues = rawRule.Feed ?? FeedDefaults;
         List<ResolvedFoodEntry> resolvedFoods = ResolveFoodEntries(
             prefabName,
-            rawRule,
             effectiveFoods,
             validFoodNames,
             explicitRule,
@@ -410,7 +290,6 @@ internal static class FeedSystem
         {
             List<ResolvedFoodEntry> foods = ResolveFoodEntries(
                 prefabName,
-                rawRule,
                 entry.Value,
                 validFoodNames: null,
                 explicitRule,
@@ -423,7 +302,6 @@ internal static class FeedSystem
 
     private static List<ResolvedFoodEntry> ResolveFoodEntries(
         string prefabName,
-        RawFeedingRule rawRule,
         IEnumerable<RawFoodEntry> rawFoods,
         HashSet<string>? validFoodNames,
         bool explicitRule,
@@ -433,16 +311,7 @@ internal static class FeedSystem
         foreach (RawFoodEntry rawFood in rawFoods)
         {
             string foodKey = FeedingYamlParser.FormatFoodKey(rawFood.PrefabName, rawFood.RequiredQuality);
-            if (!TryResolveFoodValue(rawRule, rawFood, out float foodValue))
-            {
-                if (explicitRule)
-                {
-                    FeedLikeGrandmaPlugin.Log.LogWarning(
-                        $"Ignoring food '{foodKey}' for prefab '{prefabName}' because no food number was configured.");
-                }
-
-                continue;
-            }
+            float foodValue = ResolveFoodValue(rawFood);
 
             if (validateNativeFood && validFoodNames != null && !validFoodNames.Contains(rawFood.PrefabName))
             {
@@ -672,7 +541,7 @@ internal static class FeedSystem
     private static List<RawFoodEntry> GetEffectiveFoodEntries(GameObject prefab, RawFeedingRule rawRule)
     {
         List<RawFoodEntry> foods = rawRule.Foods.ToList();
-        if (foods.Count > 0 || rawRule.ConsumeItems.Count > 0)
+        if (rawRule.HasConsumeItemsOverride)
         {
             return foods;
         }
@@ -693,8 +562,7 @@ internal static class FeedSystem
 
             foods.Add(new RawFoodEntry
             {
-                PrefabName = itemName,
-                DefaultToOne = true
+                PrefabName = itemName
             });
         }
 
@@ -718,21 +586,22 @@ internal static class FeedSystem
                rawRule.Tame == null &&
                rawRule.Procreation == null &&
                rawRule.Grow == null &&
-               rawRule.Foods.Count == 0 &&
-               rawRule.ConsumeItems.Count == 0 &&
+               !rawRule.HasConsumeItemsOverride &&
                rawRule.LevelUpItems.Count == 0;
     }
 
     private static void ApplyConfiguredConsumeData(GameObject prefab, RawFeedingRule rawRule)
     {
-        List<string> consumeItemNames = rawRule.ConsumeItems
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        if (consumeItemNames.Count == 0)
+        if (!rawRule.HasConsumeItemsOverride)
         {
             return;
         }
+
+        List<string> consumeItemNames = rawRule.Foods
+            .Select(food => food.PrefabName)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         MonsterAI? monsterAI = prefab.GetComponent<MonsterAI>();
         if ((object?)monsterAI == null)
@@ -740,19 +609,16 @@ internal static class FeedSystem
             return;
         }
 
-        if (consumeItemNames.Count > 0)
+        List<ItemDrop> consumeItems = new();
+        foreach (string itemName in consumeItemNames)
         {
-            List<ItemDrop> consumeItems = new();
-            foreach (string itemName in consumeItemNames)
+            if (TryResolveItemDrop(prefab.name, itemName, out ItemDrop? itemDrop))
             {
-                if (TryResolveItemDrop(prefab.name, itemName, out ItemDrop? itemDrop))
-                {
-                    consumeItems.Add(itemDrop!);
-                }
+                consumeItems.Add(itemDrop!);
             }
-
-            monsterAI.m_consumeItems = consumeItems;
         }
+
+        monsterAI.m_consumeItems = consumeItems;
     }
 
     private static void ApplyConfiguredTameableData(GameObject prefab, RawFeedingRule rawRule)
@@ -827,176 +693,6 @@ internal static class FeedSystem
         eggGrow.m_growTime = rawRule.EggGrow.GrowTime;
     }
 
-    internal static bool ShouldRunProcreation(Procreation procreation)
-    {
-        if (FeedLikeGrandmaPlugin.HorizontalProcreationLimit.Value != FeedLikeGrandmaPlugin.Toggle.On)
-        {
-            return true;
-        }
-
-        if ((object?)procreation == null ||
-            (object?)procreation.m_nview == null ||
-            !procreation.m_nview.IsValid() ||
-            !procreation.m_nview.IsOwner() ||
-            (object?)procreation.m_tameable == null ||
-            !procreation.m_tameable.IsTamed() ||
-            procreation.IsPregnant())
-        {
-            return true;
-        }
-
-        if (!TryEnsureProcreationPrefabs(procreation) ||
-            (object?)procreation.m_myPrefab == null ||
-            (object?)procreation.m_offspringPrefab == null)
-        {
-            return true;
-        }
-
-        Vector3 center = ((Component)procreation).transform.position;
-        int adultCount = CountPrefabInstancesXZ(procreation.m_myPrefab, center, procreation.m_totalCheckRange);
-        int offspringCount = CountPrefabInstancesXZ(procreation.m_offspringPrefab, center, procreation.m_totalCheckRange);
-        return adultCount + offspringCount < procreation.m_maxCreatures;
-    }
-
-    private static bool TryEnsureProcreationPrefabs(Procreation procreation)
-    {
-        if ((object?)procreation.m_myPrefab != null && (object?)procreation.m_offspringPrefab != null)
-        {
-            return true;
-        }
-
-        if ((object?)ZNetScene.instance == null ||
-            (object?)procreation.m_nview == null ||
-            !procreation.m_nview.IsValid())
-        {
-            return false;
-        }
-
-        if ((object?)procreation.m_offspringPrefab == null)
-        {
-            if ((object?)procreation.m_offspring == null)
-            {
-                return false;
-            }
-
-            string prefabName = Utils.GetPrefabName(procreation.m_offspring);
-            procreation.m_offspringPrefab = ZNetScene.instance.GetPrefab(prefabName);
-        }
-
-        if ((object?)procreation.m_myPrefab == null)
-        {
-            int prefabHash = procreation.m_nview.GetZDO().GetPrefab();
-            procreation.m_myPrefab = ZNetScene.instance.GetPrefab(prefabHash);
-        }
-
-        return (object?)procreation.m_myPrefab != null && (object?)procreation.m_offspringPrefab != null;
-    }
-
-    private static int CountPrefabInstancesXZ(GameObject prefab, Vector3 center, float maxRange)
-    {
-        int prefabHash = GetPrefabHash(prefab);
-        if (prefabHash == 0)
-        {
-            return 0;
-        }
-
-        EnsureProcreationInstanceInterest(prefabHash);
-        return CountCachedPrefabInstancesXZ(prefabHash, center, maxRange);
-    }
-
-    private static int CountCachedPrefabInstancesXZ(int prefabHash, Vector3 center, float maxRange)
-    {
-        if (!ProcreationInstanceCache.TryGetValue(prefabHash, out HashSet<ZNetView>? instances) ||
-            instances.Count == 0)
-        {
-            return 0;
-        }
-
-        instances.RemoveWhere(view => !IsCachedProcreationInstanceValid(view, prefabHash));
-
-        int count = 0;
-        foreach (ZNetView instance in instances)
-        {
-            if (!IsWithinXZRange(instance.transform.position, center, maxRange))
-            {
-                continue;
-            }
-
-            count++;
-        }
-
-        return count;
-    }
-
-    private static void EnsureProcreationInstanceInterest(int prefabHash)
-    {
-        if (prefabHash == 0 || !ProcreationInstancePrefabHashes.Add(prefabHash))
-        {
-            return;
-        }
-
-        RebuildProcreationInstanceBucket(prefabHash);
-    }
-
-    private static void RebuildProcreationInstanceBucket(int prefabHash)
-    {
-        HashSet<ZNetView> instances = new();
-        if ((object?)ZNetScene.instance != null && ZNetScene.instance.m_instances != null)
-        {
-            foreach (ZNetView instance in ZNetScene.instance.m_instances.Values)
-            {
-                if (IsCachedProcreationInstanceValid(instance, prefabHash))
-                {
-                    instances.Add(instance);
-                }
-            }
-        }
-
-        ProcreationInstanceCache[prefabHash] = instances;
-    }
-
-    private static bool IsCachedProcreationInstanceValid(ZNetView? nview, int prefabHash)
-    {
-        return TryGetSpawnedInstancePrefabHash(nview, out int instancePrefabHash) &&
-               instancePrefabHash == prefabHash;
-    }
-
-    private static bool TryGetSpawnedInstancePrefabHash(ZNetView? nview, out int prefabHash)
-    {
-        prefabHash = 0;
-        if (nview == null || !nview.IsValid())
-        {
-            return false;
-        }
-
-        ZDO zdo = nview.GetZDO();
-        if (zdo == null)
-        {
-            return false;
-        }
-
-        prefabHash = zdo.GetPrefab();
-        return prefabHash != 0;
-    }
-
-    private static int GetPrefabHash(GameObject prefab)
-    {
-        if ((object?)prefab == null)
-        {
-            return 0;
-        }
-
-        string prefabName = NormalizePrefabName(prefab.name);
-        return string.IsNullOrWhiteSpace(prefabName)
-            ? 0
-            : StringExtensionMethods.GetStableHashCode(prefabName);
-    }
-
-    private static bool IsWithinXZRange(Vector3 position, Vector3 center, float maxRange)
-    {
-        return maxRange <= 0f || Utils.DistanceXZ(position, center) <= maxRange;
-    }
-
     private static bool TryResolveItemDrop(string creaturePrefabName, string itemPrefabName, out ItemDrop? itemDrop)
     {
         itemDrop = null;
@@ -1017,33 +713,27 @@ internal static class FeedSystem
         return true;
     }
 
-    private static bool TryResolveFoodValue(RawFeedingRule rule, RawFoodEntry food, out float value)
+    private static float ResolveFoodValue(RawFoodEntry food)
     {
         if (food.Value.HasValue)
         {
-            value = food.Value.Value;
-            return true;
+            return food.Value.Value;
         }
 
         if (food.RequiredQuality.HasValue &&
-            FoodNumbers.TryGetValue(FeedingYamlParser.FormatFoodKey(food.PrefabName, food.RequiredQuality), out value))
+            FoodNumbers.TryGetValue(
+                FeedingYamlParser.FormatFoodKey(food.PrefabName, food.RequiredQuality),
+                out float qualityValue))
         {
-            return true;
+            return qualityValue;
         }
 
-        if (FoodNumbers.TryGetValue(food.PrefabName, out value))
+        if (FoodNumbers.TryGetValue(food.PrefabName, out float value))
         {
-            return true;
+            return value;
         }
 
-        if (food.DefaultToOne)
-        {
-            value = 1f;
-            return true;
-        }
-
-        value = 0f;
-        return false;
+        return 1f;
     }
 
     internal static void RegisterTargetRpc(ZNetView? nview)
@@ -1203,7 +893,7 @@ internal static class FeedSystem
         }
 
         if (FeedLikeGrandmaPlugin.ShowFeedingHelp.Value.IsOn() &&
-            TryBuildHoverFoodRows(Player.m_localPlayer, context, out HoverFoodRows foodRows) &&
+            TryBuildHoverFoodRows(Player.m_localPlayer, context, out FeedHoverFoodRows foodRows) &&
             foodRows.TotalCount > 0)
         {
             lines.Add(FeedLocalization.Text("$flg_hover_feed_instruction"));
@@ -1268,32 +958,13 @@ internal static class FeedSystem
     internal static void UpdateHoverIcons(Player player)
     {
         Hud? hud = Hud.instance;
-        if (hud == null || hud.m_rootObject == null)
+        if (!TryGetHoverFoods(player, out FeedHoverFoodRows rows))
         {
-            _hoverHud?.Destroy();
-            _hoverHud = null;
+            FeedHoverHud.Update(hud, rows: null);
             return;
         }
 
-        if (_hoverHud == null || !_hoverHud.IsValidFor(hud))
-        {
-            _hoverHud?.Destroy();
-            _hoverHud = new HoverFoodIconHud(hud);
-        }
-
-        if (!TryGetHoverFoods(player, out HoverFoodRows rows))
-        {
-            _hoverHud.Hide();
-            return;
-        }
-
-        if (rows.TotalCount == 0)
-        {
-            _hoverHud.Hide();
-            return;
-        }
-
-        _hoverHud.Show(rows);
+        FeedHoverHud.Update(hud, rows);
     }
 
     internal static bool HasRuleFor(GameObject gameObject)
@@ -1549,7 +1220,6 @@ internal static class FeedSystem
         int requestId = _nextRequestId++;
         PendingRequests[requestId] = new PendingFeedRequest
         {
-            RequestId = requestId,
             ItemPrefabName = itemPrefabName,
             ItemQuality = itemQuality,
             TargetId = context.NView.GetZDO().m_uid,
@@ -1564,8 +1234,7 @@ internal static class FeedSystem
             RequesterId = player.GetZDOID(),
             ItemPrefabName = itemPrefabName,
             ItemQuality = itemQuality,
-            RequestedAmount = requestedAmount,
-            RequesterHasTamingBoost = player.GetSEMan().HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost)
+            RequestedAmount = requestedAmount
         };
 
         context.NView.InvokeRPC(FeedRequestRpc, request.Write());
@@ -1635,13 +1304,60 @@ internal static class FeedSystem
             return;
         }
 
-        FeedResponseMessage response = ProcessFeedRequest(((Component)nview).gameObject, request);
+        ZDO targetZdo = nview.GetZDO();
+        ZDOID targetId = targetZdo.m_uid;
+        long nowTicks = ZNet.instance.GetTime().Ticks;
+        CleanupCompletedFeedRequests(nowTicks);
+        (long Sender, int RequestId) completedKey = (sender, request.RequestId);
+        if (CompletedFeedRequests.TryGetValue(completedKey, out CompletedFeedRequest? completed))
+        {
+            if (completed.Matches(request, targetId))
+            {
+                requester.m_nview.InvokeRPC(FeedResponseRpc, completed.Response.Write());
+            }
+            else
+            {
+                FeedLikeGrandmaPlugin.Log.LogWarning(
+                    $"Ignored reused feed request id {request.RequestId} from peer {sender} with different request data.");
+            }
+
+            return;
+        }
+
+        GameObject targetObject = ((Component)nview).gameObject;
+        FeedResponseMessage response;
+        if (!IsRequesterInFeedRange(requester, targetObject))
+        {
+            response = new FeedResponseMessage
+            {
+                RequestId = request.RequestId,
+                ItemPrefabName = request.ItemPrefabName,
+                TargetId = targetId,
+                Message = FeedLocalization.Text("$flg_feed_too_far")
+            };
+        }
+        else
+        {
+            response = ProcessFeedRequest(targetObject, request, requester);
+        }
+
+        StoreCompletedFeedRequest(completedKey, new CompletedFeedRequest
+        {
+            RequesterId = request.RequesterId,
+            TargetId = targetId,
+            ItemPrefabName = request.ItemPrefabName,
+            ItemQuality = request.ItemQuality,
+            RequestedAmount = request.RequestedAmount,
+            CompletedAtTicks = nowTicks,
+            Response = response
+        });
         requester.m_nview.InvokeRPC(FeedResponseRpc, response.Write());
     }
 
     private static FeedResponseMessage ProcessFeedRequest(
         GameObject targetObject,
-        FeedRequestMessage request)
+        FeedRequestMessage request,
+        Player requester)
     {
         FeedResponseMessage response = new()
         {
@@ -1689,15 +1405,18 @@ internal static class FeedSystem
             return response;
         }
 
-        float feedMultiplier = request.RequesterHasTamingBoost ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier() : 1f;
+        bool requesterHasTamingBoost = requester.GetSEMan()
+            .HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost);
+        float feedMultiplier = requesterHasTamingBoost
+            ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier()
+            : 1f;
         FeedEffectPlan plan = BuildFeedEffectPlan(
             context,
             dailyFood,
             levelUpFood,
             hasLevelUpItems,
             amount,
-            feedMultiplier,
-            capSingleLevel: true);
+            feedMultiplier);
 
         if (!plan.HasAnyEffect)
         {
@@ -1720,7 +1439,7 @@ internal static class FeedSystem
 
         if (plan.StarDeltaRequested > 0)
         {
-            response.StarDelta = ApplyStarProgress(context, plan.StarDeltaRequested, singleLevelOnly: true);
+            response.StarDelta = ApplyStarProgress(context, plan.StarDeltaRequested);
         }
 
         if (!grewThisFeed)
@@ -1763,8 +1482,7 @@ internal static class FeedSystem
         ResolvedFoodEntry? levelUpFood,
         bool hasLevelUpItems,
         int amount,
-        float feedMultiplier,
-        bool capSingleLevel)
+        float feedMultiplier)
     {
         amount = Mathf.Max(0, amount);
         bool isTamed = context.Character.IsTamed();
@@ -1779,7 +1497,7 @@ internal static class FeedSystem
             ? starFood.Value * context.Rule.LevelUpConstant * feedMultiplier
             : 0f;
 
-        if (capSingleLevel && starDeltaPerItem > 0f)
+        if (starDeltaPerItem > 0f)
         {
             amount = CapAmountForSingleLevelUp(context, amount, starDeltaPerItem);
         }
@@ -1993,8 +1711,7 @@ internal static class FeedSystem
             levelUpFood,
             hasLevelUpItems,
             amount: 1,
-            feedMultiplier,
-            capSingleLevel: true);
+            feedMultiplier);
 
         if ((object?)context.Tameable != null && plan.FedDeltaRequested > 0f)
         {
@@ -2006,7 +1723,7 @@ internal static class FeedSystem
 
         if (plan.StarDeltaRequested > 0)
         {
-            ApplyStarProgress(context, plan.StarDeltaRequested, singleLevelOnly: true);
+            ApplyStarProgress(context, plan.StarDeltaRequested);
         }
 
         if (!grewThisFeed)
@@ -2064,7 +1781,7 @@ internal static class FeedSystem
         }
     }
 
-    private static bool TryGetHoverFoods(Player player, out HoverFoodRows rows)
+    private static bool TryGetHoverFoods(Player player, out FeedHoverFoodRows rows)
     {
         rows = default;
         if (player == null)
@@ -2081,7 +1798,7 @@ internal static class FeedSystem
         return TryBuildHoverFoodRows(player, context, out rows);
     }
 
-    private static bool TryBuildHoverFoodRows(Player? player, FeedTargetContext context, out HoverFoodRows rows)
+    private static bool TryBuildHoverFoodRows(Player? player, FeedTargetContext context, out FeedHoverFoodRows rows)
     {
         rows = default;
         if (player == null ||
@@ -2107,7 +1824,7 @@ internal static class FeedSystem
         }
 
         int currentLevel = levelUpFoods.Count > 0 ? Mathf.Max(1, context.Character.GetLevel()) : 0;
-        rows = new HoverFoodRows(levelUpFoods, dailyFoods, currentLevel);
+        rows = new FeedHoverFoodRows(levelUpFoods, dailyFoods, currentLevel);
         return true;
     }
 
@@ -2441,7 +2158,7 @@ internal static class FeedSystem
         return Mathf.Clamp(usefulAmount, 1, amount);
     }
 
-    private static int ApplyStarProgress(FeedTargetContext context, int requestedDelta, bool singleLevelOnly)
+    private static int ApplyStarProgress(FeedTargetContext context, int requestedDelta)
     {
         if (requestedDelta <= 0)
         {
@@ -2458,48 +2175,26 @@ internal static class FeedSystem
 
         float progress = GetStarProgress(context.NView);
         int applied = 0;
-        int remainingDelta = requestedDelta;
-
-        while (remainingDelta > 0 && currentLevel < maxLevel)
+        int targetLevel = currentLevel + 1;
+        float required = GetRequiredStarProgress(context, targetLevel);
+        if (progress + 0.0001f < required)
         {
-            int targetLevel = currentLevel + 1;
-            float required = GetRequiredStarProgress(context, targetLevel);
-            if (progress + 0.0001f < required)
-            {
-                float freeCapacity = required - progress;
-                int toApply = Mathf.Min(remainingDelta, Mathf.CeilToInt(freeCapacity));
-                progress += toApply;
-                remainingDelta -= toApply;
-                applied += toApply;
+            int toApply = Mathf.Min(requestedDelta, Mathf.CeilToInt(required - progress));
+            progress += toApply;
+            applied = toApply;
+        }
 
-                if (progress + 0.0001f < required)
-                {
-                    break;
-                }
-            }
-
-            progress -= required;
+        if (progress + 0.0001f >= required)
+        {
             int levelBefore = context.Character.GetLevel();
-            SetLevelPreservingCllcModifiers(context.Character, targetLevel);
+            FeedCreatureModifierCompatibility.SetLevelPreservingCllcModifiers(context.Character, targetLevel);
             if (context.Character.IsTamed() && context.Character.GetLevel() > levelBefore)
             {
                 SpawnTamedProgressionEffect(((Component)context.Character).transform);
             }
 
-            currentLevel = targetLevel;
             ApplyEffectiveFedDuration(context);
-
-            if (singleLevelOnly)
-            {
-                progress = 0f;
-                break;
-            }
-
-            if (currentLevel >= maxLevel)
-            {
-                progress = 0f;
-                break;
-            }
+            progress = 0f;
         }
 
         SetStarProgress(context.NView, progress);
@@ -2691,7 +2386,7 @@ internal static class FeedSystem
 
     private static void GrowNow(Growup growup, Character currentCharacter)
     {
-        TamingOrbSystem.CaptureCllcModifiers(currentCharacter, out string cllcInfusion, out string cllcExtraEffect);
+        FeedCreatureModifierCompatibility.CaptureCllcModifiers(currentCharacter, out string cllcInfusion, out string cllcExtraEffect);
         Character? grownCharacter = UnityEngine.Object.Instantiate(growup.GetPrefab(), ((Component)growup).transform.position, ((Component)growup).transform.rotation).GetComponent<Character>();
         if ((object?)grownCharacter != null)
         {
@@ -2701,8 +2396,8 @@ internal static class FeedSystem
             }
 
             grownCharacter.SetLevel(currentCharacter.GetLevel());
-            InheritCreatureManagerModifiers(currentCharacter, grownCharacter);
-            TamingOrbSystem.RestoreCllcModifiers(grownCharacter, cllcInfusion, cllcExtraEffect);
+            FeedCreatureModifierCompatibility.InheritCreatureManagerModifiers(currentCharacter, grownCharacter);
+            FeedCreatureModifierCompatibility.RestoreCllcModifiers(grownCharacter, cllcInfusion, cllcExtraEffect);
             if (currentCharacter.IsTamed())
             {
                 SpawnTamedProgressionEffect(((Component)grownCharacter).transform);
@@ -2710,51 +2405,6 @@ internal static class FeedSystem
         }
 
         growup.m_nview.Destroy();
-    }
-
-    private static void SetLevelPreservingCllcModifiers(Character character, int level)
-    {
-        TamingOrbSystem.CaptureCllcModifiers(character, out string cllcInfusion, out string cllcExtraEffect);
-        try
-        {
-            character.SetLevel(level);
-        }
-        finally
-        {
-            TamingOrbSystem.RestoreCllcModifiers(character, cllcInfusion, cllcExtraEffect);
-        }
-    }
-
-    private static void InheritCreatureManagerModifiers(Character source, Character target)
-    {
-        if (!_creatureManagerModifierApiResolved)
-        {
-            _creatureManagerModifierApiResolved = true;
-            Assembly? assembly = AppDomain.CurrentDomain
-                .GetAssemblies()
-                .FirstOrDefault(loaded => loaded.GetName().Name == "CreatureManager");
-            Type? modifierManager = assembly?.GetType("CreatureManager.CreatureModifierManager");
-            _creatureManagerInheritModifiers = modifierManager?.GetMethod(
-                "InheritModifiers",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
-                null,
-                new[] { typeof(Character), typeof(Character) },
-                null);
-        }
-
-        if (_creatureManagerInheritModifiers == null)
-        {
-            return;
-        }
-
-        try
-        {
-            _creatureManagerInheritModifiers.Invoke(null, new object[] { source, target });
-        }
-        catch (Exception ex)
-        {
-            FeedLikeGrandmaPlugin.Log.LogDebug($"Could not inherit CreatureManager modifiers during growth: {ex.Message}");
-        }
     }
 
     private static void SpawnTamedProgressionEffect(Transform target)
@@ -2799,6 +2449,77 @@ internal static class FeedSystem
     {
         GameObject? playerObject = ZNetScene.instance.FindInstance(playerId);
         return (object?)playerObject == null ? null : playerObject.GetComponent<Player>();
+    }
+
+    private static bool IsRequesterInFeedRange(Player requester, GameObject targetObject)
+    {
+        Character? target = targetObject.GetComponent<Character>();
+        if ((object?)target == null)
+        {
+            return true;
+        }
+
+        Vector3 requesterEye = requester.GetEyePoint();
+        Vector3 targetPoint = (object?)target.m_collider != null && target.m_collider.enabled
+            ? target.m_collider.ClosestPoint(requesterEye)
+            : target.GetCenterPoint();
+        float maxDistance = Mathf.Max(0f, requester.m_maxInteractDistance) + FeedRequestDistanceTolerance;
+        return (targetPoint - requesterEye).sqrMagnitude <= maxDistance * maxDistance;
+    }
+
+    private static void CleanupCompletedFeedRequests(long nowTicks)
+    {
+        if (CompletedFeedRequests.Count == 0)
+        {
+            return;
+        }
+
+        List<(long Sender, int RequestId)>? expiredKeys = null;
+        foreach (KeyValuePair<(long Sender, int RequestId), CompletedFeedRequest> entry in CompletedFeedRequests)
+        {
+            if (nowTicks - entry.Value.CompletedAtTicks <= CompletedRequestRetentionTicks)
+            {
+                continue;
+            }
+
+            expiredKeys ??= new List<(long Sender, int RequestId)>();
+            expiredKeys.Add(entry.Key);
+        }
+
+        if (expiredKeys == null)
+        {
+            return;
+        }
+
+        foreach ((long Sender, int RequestId) key in expiredKeys)
+        {
+            CompletedFeedRequests.Remove(key);
+        }
+    }
+
+    private static void StoreCompletedFeedRequest(
+        (long Sender, int RequestId) key,
+        CompletedFeedRequest completed)
+    {
+        if (CompletedFeedRequests.Count >= MaxCompletedRequestCacheEntries)
+        {
+            (long Sender, int RequestId) oldestKey = default;
+            long oldestTicks = long.MaxValue;
+            foreach (KeyValuePair<(long Sender, int RequestId), CompletedFeedRequest> entry in CompletedFeedRequests)
+            {
+                if (entry.Value.CompletedAtTicks >= oldestTicks)
+                {
+                    continue;
+                }
+
+                oldestKey = entry.Key;
+                oldestTicks = entry.Value.CompletedAtTicks;
+            }
+
+            CompletedFeedRequests.Remove(oldestKey);
+        }
+
+        CompletedFeedRequests[key] = completed;
     }
 
     private static int CountItemsByPrefab(Inventory inventory, string prefabName, int itemQuality)
@@ -2866,463 +2587,34 @@ internal static class FeedSystem
                itemPrefabName.Equals(prefabName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private readonly struct HoverFoodRows
-    {
-        public HoverFoodRows(
-            IReadOnlyList<ResolvedFoodEntry> levelUpFoods,
-            IReadOnlyList<ResolvedFoodEntry> dailyFoods,
-            int currentLevel)
-        {
-            LevelUpFoods = levelUpFoods;
-            DailyFoods = dailyFoods;
-            CurrentLevel = currentLevel;
-        }
-
-        public IReadOnlyList<ResolvedFoodEntry> LevelUpFoods { get; }
-        public IReadOnlyList<ResolvedFoodEntry> DailyFoods { get; }
-        public int CurrentLevel { get; }
-        public int TotalCount => LevelUpFoods.Count + DailyFoods.Count;
-    }
-
-    private sealed class HoverFoodIconHud
-    {
-        private readonly List<HoverFoodIcon> _levelUpIcons = new();
-        private readonly List<HoverFoodIcon> _dailyIcons = new();
-        private readonly Hud _ownerHud;
-        private readonly GameObject _ownerRoot;
-        private readonly GameObject _root;
-        private readonly RectTransform _rootTransform;
-        private readonly GameObject? _levelUpRow;
-        private readonly RectTransform? _levelUpRowTransform;
-        private readonly HoverFoodRowLabel? _levelUpLabel;
-        private readonly GameObject? _dailyRow;
-        private readonly RectTransform? _dailyRowTransform;
-        private IReadOnlyList<ResolvedFoodEntry>? _shownLevelUpFoods;
-        private IReadOnlyList<ResolvedFoodEntry>? _shownDailyFoods;
-        private int _shownCurrentLevel;
-        private string _shownLanguage = string.Empty;
-        private float _shownIconSize = -1f;
-        private bool _contentShown;
-        private float _nextAnchorUpdateTime;
-
-        public HoverFoodIconHud(Hud ownerHud)
-        {
-            _ownerHud = ownerHud;
-            _ownerRoot = ownerHud.m_rootObject;
-            _root = new GameObject("FeedLikeGrandmaHoverIcons", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
-            _rootTransform = _root.GetComponent<RectTransform>();
-            _rootTransform.SetParent(_ownerRoot.transform, false);
-            _rootTransform.anchorMin = new Vector2(0.5f, 0.5f);
-            _rootTransform.anchorMax = new Vector2(0.5f, 0.5f);
-            _rootTransform.pivot = new Vector2(0f, 0f);
-
-            VerticalLayoutGroup layout = _root.GetComponent<VerticalLayoutGroup>();
-            layout.childAlignment = TextAnchor.UpperLeft;
-            layout.childForceExpandWidth = false;
-            layout.childForceExpandHeight = false;
-            layout.spacing = GetRowSpacing();
-
-            ContentSizeFitter fitter = _root.GetComponent<ContentSizeFitter>();
-            fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-            _levelUpRow = CreateRow("LevelUp", _rootTransform, out _levelUpRowTransform);
-            _levelUpLabel = HoverFoodRowLabel.Create(_levelUpRowTransform);
-            _dailyRow = CreateRow("Daily", _rootTransform, out _dailyRowTransform);
-            _root.SetActive(false);
-        }
-
-        public bool IsValidFor(Hud? hud)
-        {
-            return hud != null &&
-                   _ownerHud == hud &&
-                   _ownerRoot == hud.m_rootObject &&
-                   _root != null &&
-                   _rootTransform != null;
-        }
-
-        public void Show(HoverFoodRows rows)
-        {
-            if (!IsValidFor(Hud.instance))
-            {
-                return;
-            }
-
-            float iconSize = FeedLikeGrandmaPlugin.FoodIconSize.Value;
-            string language = Localization.instance == null ? string.Empty : Localization.instance.GetSelectedLanguage();
-            bool contentChanged = !_contentShown ||
-                                  !ReferenceEquals(_shownLevelUpFoods, rows.LevelUpFoods) ||
-                                  !ReferenceEquals(_shownDailyFoods, rows.DailyFoods) ||
-                                  _shownCurrentLevel != rows.CurrentLevel ||
-                                  !string.Equals(_shownLanguage, language, StringComparison.Ordinal) ||
-                                  !Approximately(_shownIconSize, iconSize);
-            if (contentChanged)
-            {
-                VerticalLayoutGroup layout = _root.GetComponent<VerticalLayoutGroup>();
-                layout.spacing = GetRowSpacing();
-
-                string levelUpLabel = rows.CurrentLevel > 0
-                    ? FeedLocalization.Format(
-                        "$flg_food_icon_level_label",
-                        rows.CurrentLevel.ToString(CultureInfo.InvariantCulture),
-                        (rows.CurrentLevel + 1).ToString(CultureInfo.InvariantCulture))
-                    : string.Empty;
-                ShowRow(_levelUpRow, _levelUpRowTransform, _levelUpIcons, rows.LevelUpFoods, _levelUpLabel, levelUpLabel, iconSize);
-                ShowRow(_dailyRow, _dailyRowTransform, _dailyIcons, rows.DailyFoods, label: null, labelText: string.Empty, iconSize);
-                _shownLevelUpFoods = rows.LevelUpFoods;
-                _shownDailyFoods = rows.DailyFoods;
-                _shownCurrentLevel = rows.CurrentLevel;
-                _shownLanguage = language;
-                _shownIconSize = iconSize;
-                _contentShown = true;
-            }
-
-            if (!_root.activeSelf || contentChanged || Time.unscaledTime >= _nextAnchorUpdateTime)
-            {
-                _rootTransform.anchoredPosition = GetHoverTextIconAnchor();
-                _nextAnchorUpdateTime = Time.unscaledTime + 0.1f;
-            }
-
-            SetActiveIfChanged(_root, rows.TotalCount > 0);
-        }
-
-        public void Hide()
-        {
-            SetActiveIfChanged(_root, false);
-        }
-
-        public void Destroy()
-        {
-            if (_root != null)
-            {
-                UnityEngine.Object.Destroy(_root);
-            }
-        }
-
-        private static GameObject CreateRow(string name, RectTransform parent, out RectTransform rowTransform)
-        {
-            GameObject rowObject = new($"FeedLikeGrandma{name}FoodRow", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(ContentSizeFitter));
-            rowTransform = rowObject.GetComponent<RectTransform>();
-            rowTransform.SetParent(parent, false);
-
-            HorizontalLayoutGroup layout = rowObject.GetComponent<HorizontalLayoutGroup>();
-            layout.childAlignment = TextAnchor.MiddleLeft;
-            layout.childForceExpandWidth = false;
-            layout.childForceExpandHeight = false;
-            layout.spacing = HoverFoodIconSpacing;
-
-            ContentSizeFitter fitter = rowObject.GetComponent<ContentSizeFitter>();
-            fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            rowObject.SetActive(false);
-            return rowObject;
-        }
-
-        private static void ShowRow(
-            GameObject? rowObject,
-            RectTransform? rowTransform,
-            List<HoverFoodIcon> icons,
-            IReadOnlyList<ResolvedFoodEntry> foods,
-            HoverFoodRowLabel? label,
-            string labelText,
-            float iconSize)
-        {
-            if ((object?)rowObject == null || (object?)rowTransform == null)
-            {
-                return;
-            }
-
-            EnsureIconCount(rowTransform, icons, foods.Count);
-
-            HorizontalLayoutGroup layout = rowObject.GetComponent<HorizontalLayoutGroup>();
-            layout.spacing = HoverFoodIconSpacing;
-
-            for (int i = 0; i < icons.Count; i++)
-            {
-                bool active = i < foods.Count;
-                SetActiveIfChanged(icons[i].GameObject, active);
-                if (!active)
-                {
-                    continue;
-                }
-
-                RectTransform iconTransform = icons[i].RectTransform;
-                iconTransform.sizeDelta = Vector2.one * iconSize;
-                icons[i].SetFood(foods[i], iconSize);
-            }
-
-            if (label != null)
-            {
-                label.SetText(labelText, iconSize);
-            }
-
-            SetActiveIfChanged(rowObject, foods.Count > 0);
-        }
-
-        private static void EnsureIconCount(RectTransform parent, List<HoverFoodIcon> icons, int count)
-        {
-            while (icons.Count < count)
-            {
-                icons.Add(HoverFoodIcon.Create(parent, icons.Count));
-            }
-        }
-
-        private static float GetRowSpacing()
-        {
-            return Mathf.Max(1f, HoverFoodIconSpacing * 0.35f);
-        }
-
-        private static void SetActiveIfChanged(GameObject? gameObject, bool active)
-        {
-            if (gameObject != null && gameObject.activeSelf != active)
-            {
-                gameObject.SetActive(active);
-            }
-        }
-
-        private static Vector2 GetHoverTextIconAnchor()
-        {
-            Hud? hud = Hud.instance;
-            if (hud == null || hud.m_hoverName == null || hud.m_rootObject == null)
-            {
-                return new Vector2(0f, HoverFoodIconOffsetY);
-            }
-
-            RectTransform? parent = hud.m_rootObject.transform as RectTransform;
-            RectTransform hoverTransform = hud.m_hoverName.rectTransform;
-            if (parent == null || hoverTransform == null)
-            {
-                return new Vector2(0f, HoverFoodIconOffsetY);
-            }
-
-            hud.m_hoverName.ForceMeshUpdate();
-            Bounds textBounds = hud.m_hoverName.textBounds;
-            Vector3 topLeftWorld;
-            if (textBounds.size.sqrMagnitude > 0.001f)
-            {
-                topLeftWorld = hoverTransform.TransformPoint(new Vector3(textBounds.min.x, textBounds.max.y, 0f));
-            }
-            else
-            {
-                Vector3[] corners = new Vector3[4];
-                hoverTransform.GetWorldCorners(corners);
-                topLeftWorld = corners[1];
-            }
-
-            Vector3 topLeftLocal = parent.InverseTransformPoint(topLeftWorld);
-            return new Vector2(topLeftLocal.x, topLeftLocal.y + HoverFoodIconOffsetY);
-        }
-    }
-
-    private sealed class HoverFoodRowLabel
-    {
-        private readonly GameObject _gameObject;
-        private readonly RectTransform _rectTransform;
-        private readonly TextMeshProUGUI _text;
-        private readonly LayoutElement _layoutElement;
-        private string _lastText = string.Empty;
-        private float _lastIconSize = -1f;
-
-        private HoverFoodRowLabel(GameObject gameObject, RectTransform rectTransform, TextMeshProUGUI text, LayoutElement layoutElement)
-        {
-            _gameObject = gameObject;
-            _rectTransform = rectTransform;
-            _text = text;
-            _layoutElement = layoutElement;
-        }
-
-        public static HoverFoodRowLabel Create(RectTransform parent)
-        {
-            GameObject labelObject = new("FeedLikeGrandmaLevelUpLabel", typeof(RectTransform), typeof(CanvasRenderer), typeof(LayoutElement));
-            RectTransform rectTransform = labelObject.GetComponent<RectTransform>();
-            rectTransform.SetParent(parent, false);
-
-            TextMeshProUGUI text = labelObject.AddComponent<TextMeshProUGUI>();
-            text.alignment = TextAlignmentOptions.MidlineLeft;
-            text.color = new Color(1f, 0.62f, 0.16f, 1f);
-            text.enableAutoSizing = true;
-            text.fontSizeMin = 8f;
-            text.fontSizeMax = 18f;
-            text.fontStyle = FontStyles.Bold;
-            text.textWrappingMode = TextWrappingModes.NoWrap;
-            text.raycastTarget = false;
-            ApplyHudFont(text, Hud.instance != null ? Hud.instance.m_hoverName : null);
-
-            Shadow shadow = labelObject.AddComponent<Shadow>();
-            shadow.effectColor = new Color(0f, 0f, 0f, 0.9f);
-            shadow.effectDistance = new Vector2(1f, -1f);
-
-            return new HoverFoodRowLabel(labelObject, rectTransform, text, labelObject.GetComponent<LayoutElement>());
-        }
-
-        public void SetText(string text, float iconSize)
-        {
-            bool active = !string.IsNullOrWhiteSpace(text);
-            if (_gameObject.activeSelf != active)
-            {
-                _gameObject.SetActive(active);
-            }
-
-            if (!active)
-            {
-                _lastText = string.Empty;
-                _lastIconSize = -1f;
-                return;
-            }
-
-            if (string.Equals(_lastText, text, StringComparison.Ordinal) && Approximately(_lastIconSize, iconSize))
-            {
-                return;
-            }
-
-            float fontSize = Mathf.Clamp(iconSize * 0.34f, 8f, 18f);
-            _text.fontSizeMax = fontSize;
-            _text.fontSize = fontSize;
-            _text.text = text;
-            _text.ForceMeshUpdate();
-
-            float preferredWidth = Mathf.Ceil(_text.preferredWidth);
-            float preferredHeight = Mathf.Max(iconSize, Mathf.Ceil(_text.preferredHeight));
-            _layoutElement.minWidth = preferredWidth;
-            _layoutElement.preferredWidth = preferredWidth;
-            _layoutElement.minHeight = preferredHeight;
-            _layoutElement.preferredHeight = preferredHeight;
-            _rectTransform.sizeDelta = new Vector2(preferredWidth, preferredHeight);
-            _rectTransform.SetAsLastSibling();
-            _lastText = text;
-            _lastIconSize = iconSize;
-        }
-    }
-
-    private sealed class HoverFoodIcon
-    {
-        private readonly Image _image;
-        private readonly LayoutElement _layoutElement;
-        private readonly TextMeshProUGUI _qualityText;
-        private readonly TextMeshProUGUI _valueText;
-        private Sprite? _lastSprite;
-        private int? _lastRequiredQuality;
-        private float _lastValue = float.NaN;
-        private float _lastIconSize = -1f;
-
-        private HoverFoodIcon(GameObject gameObject, RectTransform rectTransform, Image image, LayoutElement layoutElement, TextMeshProUGUI qualityText, TextMeshProUGUI valueText)
-        {
-            GameObject = gameObject;
-            RectTransform = rectTransform;
-            _image = image;
-            _layoutElement = layoutElement;
-            _qualityText = qualityText;
-            _valueText = valueText;
-        }
-
-        public GameObject GameObject { get; }
-        public RectTransform RectTransform { get; }
-
-        public static HoverFoodIcon Create(RectTransform parent, int index)
-        {
-            GameObject iconObject = new($"FeedLikeGrandmaIcon{index}", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(LayoutElement));
-            RectTransform iconTransform = iconObject.GetComponent<RectTransform>();
-            iconTransform.SetParent(parent, false);
-
-            Image image = iconObject.GetComponent<Image>();
-            image.preserveAspect = true;
-            image.raycastTarget = false;
-
-            LayoutElement layoutElement = iconObject.GetComponent<LayoutElement>();
-            layoutElement.flexibleWidth = 0f;
-            layoutElement.flexibleHeight = 0f;
-
-            TextMeshProUGUI qualityText = CreateBadgeText(iconTransform, "Quality", new Vector2(0.45f, 0.55f), Vector2.one, TextAlignmentOptions.TopRight, Color.white);
-            TextMeshProUGUI valueText = CreateBadgeText(iconTransform, "Value", Vector2.zero, new Vector2(1f, 0.45f), TextAlignmentOptions.BottomRight, new Color(1f, 0.82f, 0.18f, 1f));
-            return new HoverFoodIcon(iconObject, iconTransform, image, layoutElement, qualityText, valueText);
-        }
-
-        public void SetFood(ResolvedFoodEntry food, float iconSize)
-        {
-            if (ReferenceEquals(_lastSprite, food.Icon) &&
-                _lastRequiredQuality == food.RequiredQuality &&
-                Approximately(_lastValue, food.Value) &&
-                Approximately(_lastIconSize, iconSize))
-            {
-                return;
-            }
-
-            _layoutElement.minWidth = iconSize;
-            _layoutElement.minHeight = iconSize;
-            _layoutElement.preferredWidth = iconSize;
-            _layoutElement.preferredHeight = iconSize;
-            RectTransform.sizeDelta = Vector2.one * iconSize;
-
-            _image.sprite = food.Icon;
-            _image.color = Color.white;
-
-            float badgeMaxSize = Mathf.Clamp(iconSize * 0.34f, 8f, 18f);
-            ConfigureBadgeSize(_qualityText, badgeMaxSize);
-            ConfigureBadgeSize(_valueText, badgeMaxSize);
-
-            _qualityText.gameObject.SetActive(food.RequiredQuality.HasValue);
-            _qualityText.text = food.RequiredQuality.HasValue
-                ? food.RequiredQuality.Value.ToString(CultureInfo.InvariantCulture)
-                : string.Empty;
-            _valueText.text = FormatFoodValue(food.Value);
-            _lastSprite = food.Icon;
-            _lastRequiredQuality = food.RequiredQuality;
-            _lastValue = food.Value;
-            _lastIconSize = iconSize;
-        }
-
-        private static TextMeshProUGUI CreateBadgeText(RectTransform parent, string name, Vector2 anchorMin, Vector2 anchorMax, TextAlignmentOptions alignment, Color color)
-        {
-            GameObject textObject = new($"FeedLikeGrandma{name}Badge", typeof(RectTransform), typeof(CanvasRenderer));
-            textObject.SetActive(false);
-            RectTransform rectTransform = textObject.GetComponent<RectTransform>();
-            rectTransform.SetParent(parent, false);
-            rectTransform.anchorMin = anchorMin;
-            rectTransform.anchorMax = anchorMax;
-            rectTransform.offsetMin = new Vector2(1f, 0f);
-            rectTransform.offsetMax = new Vector2(-2f, 0f);
-
-            TextMeshProUGUI text = textObject.AddComponent<TextMeshProUGUI>();
-            text.alignment = alignment;
-            text.color = color;
-            text.enableAutoSizing = true;
-            text.fontSizeMin = 6f;
-            text.fontSizeMax = 18f;
-            text.fontStyle = FontStyles.Bold;
-            text.textWrappingMode = TextWrappingModes.NoWrap;
-            text.raycastTarget = false;
-            ApplyHudFont(text, Hud.instance != null ? Hud.instance.m_hoverName : null);
-
-            Shadow shadow = textObject.AddComponent<Shadow>();
-            shadow.effectColor = new Color(0f, 0f, 0f, 0.9f);
-            shadow.effectDistance = new Vector2(1f, -1f);
-            textObject.SetActive(true);
-            return text;
-        }
-
-        private static void ConfigureBadgeSize(TextMeshProUGUI text, float maxSize)
-        {
-            text.fontSizeMax = maxSize;
-            text.fontSize = maxSize;
-        }
-
-        private static string FormatFoodValue(float value)
-        {
-            return Mathf.Abs(value - Mathf.Round(value)) < 0.001f
-                ? Mathf.RoundToInt(value).ToString(CultureInfo.InvariantCulture)
-                : value.ToString("0.#", CultureInfo.InvariantCulture);
-        }
-    }
-
     private sealed class PendingFeedRequest
     {
-        public int RequestId { get; init; }
         public string ItemPrefabName { get; init; } = string.Empty;
         public int ItemQuality { get; init; } = 1;
         public ZDOID TargetId { get; init; }
         public long ExpectedResponderId { get; init; }
         public int RequestedAmount { get; init; }
         public long CreatedAtTicks { get; init; }
+    }
+
+    private sealed class CompletedFeedRequest
+    {
+        public ZDOID RequesterId { get; init; }
+        public ZDOID TargetId { get; init; }
+        public string ItemPrefabName { get; init; } = string.Empty;
+        public int ItemQuality { get; init; }
+        public int RequestedAmount { get; init; }
+        public long CompletedAtTicks { get; init; }
+        public FeedResponseMessage Response { get; init; } = null!;
+
+        public bool Matches(FeedRequestMessage request, ZDOID targetId)
+        {
+            return RequesterId.Equals(request.RequesterId) &&
+                   TargetId.Equals(targetId) &&
+                   ItemQuality == request.ItemQuality &&
+                   RequestedAmount == request.RequestedAmount &&
+                   ItemPrefabName.Equals(request.ItemPrefabName, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private sealed class FeedEffectPlan
@@ -3376,7 +2668,6 @@ internal static class FeedSystem
         public string ItemPrefabName { get; init; } = string.Empty;
         public int ItemQuality { get; init; } = 1;
         public int RequestedAmount { get; init; }
-        public bool RequesterHasTamingBoost { get; init; }
 
         public ZPackage Write()
         {
@@ -3386,7 +2677,6 @@ internal static class FeedSystem
             pkg.Write(ItemPrefabName);
             pkg.Write(ItemQuality);
             pkg.Write(RequestedAmount);
-            pkg.Write(RequesterHasTamingBoost);
             return pkg;
         }
 
@@ -3401,8 +2691,7 @@ internal static class FeedSystem
                     RequesterId = pkg.ReadZDOID(),
                     ItemPrefabName = pkg.ReadString(),
                     ItemQuality = pkg.ReadInt(),
-                    RequestedAmount = pkg.ReadInt(),
-                    RequesterHasTamingBoost = pkg.ReadBool()
+                    RequestedAmount = pkg.ReadInt()
                 };
                 return true;
             }
