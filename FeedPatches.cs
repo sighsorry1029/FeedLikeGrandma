@@ -358,9 +358,24 @@ internal static class MeadTamerTooltipSystem
 [HarmonyPatch(typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.GetIcon))]
 internal static class ItemDataGetIconPatch
 {
-    private static void Prefix(ItemDrop.ItemData __instance)
+    private static bool Prefix(ItemDrop.ItemData __instance, ref Sprite __result)
     {
-        TamingOrbSystem.NormalizeVariant(__instance);
+        if (!TamingOrbSystem.TryGetIcon(__instance, out Sprite? icon))
+        {
+            return true;
+        }
+
+        __result = icon!;
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(ItemDrop), nameof(ItemDrop.Load))]
+internal static class ItemDropLoadPatch
+{
+    private static void Postfix(ItemDrop __instance)
+    {
+        TamingOrbSystem.NormalizeWorldItemVariant(__instance);
     }
 }
 

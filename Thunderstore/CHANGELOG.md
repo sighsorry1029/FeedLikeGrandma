@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.6
+
+- Fixed captured Taming Orbs becoming impossible to pick up after being dropped on dedicated servers.
+- Kept creature icons client-local while persisting the network-safe base item variant.
+- Recovered previously dropped Taming Orbs with invalid dynamic icon variants when they are loaded.
+
 ## 1.0.5
 
 - Hardened dedicated-server manual feeding with owner-side distance and TamingBoost validation, plus bounded duplicate-request protection.

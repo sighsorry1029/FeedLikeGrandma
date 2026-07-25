@@ -324,14 +324,13 @@ internal static class TamingOrbSystem
 
         CapturedTamePayload payload;
         string serializedPayload;
-        int iconVariant = 0;
         try
         {
             payload = CapturePayload(character, tameable, nview, creaturePrefabName);
             serializedPayload = payload.Serialize();
             try
             {
-                iconVariant = GetIconVariantForPayload(item, payload);
+                _ = GetIconVariantForPayload(item, payload);
             }
             catch (Exception ex)
             {
@@ -370,7 +369,7 @@ internal static class TamingOrbSystem
         {
             item.m_stack = 1;
             item.m_customData[PayloadKey] = serializedPayload;
-            item.m_variant = iconVariant;
+            item.m_variant = 0;
             inventory.Changed();
             nview.Destroy();
         }
@@ -855,34 +854,49 @@ internal static class TamingOrbSystem
         itemDrop.m_itemData.m_variant = 0;
     }
 
-    internal static void NormalizeVariant(ItemDrop.ItemData item)
+    internal static bool TryGetIcon(ItemDrop.ItemData item, out Sprite? icon)
     {
+        icon = null;
         if (!IsTamingOrb(item))
         {
-            return;
+            return false;
         }
 
-        if (!item.m_customData.ContainsKey(PayloadKey))
+        item.m_variant = 0;
+        if (TryReadPayload(item, out CapturedTamePayload? payload, logWarnings: false))
         {
-            item.m_variant = 0;
-            return;
+            try
+            {
+                int variant = GetIconVariantForPayload(item, payload!);
+                if (IsIconVariantValid(item.m_shared, variant))
+                {
+                    icon = item.m_shared.m_icons[variant];
+                }
+            }
+            catch (Exception ex)
+            {
+                FeedLikeGrandmaPlugin.Log.LogDebug(
+                    $"Could not resolve {PrefabName} icon for {payload!.Prefab}: {ex.Message}");
+            }
         }
 
-        if (!TryReadPayload(item, out CapturedTamePayload? payload, logWarnings: false))
+        if ((object?)icon == null && item.m_shared.m_icons is { Length: > 0 })
         {
-            item.m_variant = 0;
-            return;
+            icon = item.m_shared.m_icons[0];
         }
 
-        string payloadPrefabName = payload!.Prefab;
-        if (TryGetCreatureIconVariant(item.m_shared, payloadPrefabName, out int expectedVariant) &&
-            item.m_variant == expectedVariant &&
-            IsIconVariantValid(item.m_shared, expectedVariant))
+        return true;
+    }
+
+    internal static void NormalizeWorldItemVariant(ItemDrop itemDrop)
+    {
+        if ((object?)itemDrop == null || !IsTamingOrb(itemDrop.m_itemData))
         {
             return;
         }
 
-        item.m_variant = GetIconVariantForPayload(item, payload);
+        // Creature icon indexes are client-local; persisted indexes can make vanilla reject pickup.
+        itemDrop.m_itemData.m_variant = 0;
     }
 
     private static int GetIconVariantForPayload(ItemDrop.ItemData item, CapturedTamePayload payload)
@@ -972,15 +986,6 @@ internal static class TamingOrbSystem
         }
 
         return variants;
-    }
-
-    private static bool TryGetCreatureIconVariant(ItemDrop.ItemData.SharedData shared, string creaturePrefabName, out int variant)
-    {
-        variant = 0;
-        return !string.IsNullOrWhiteSpace(creaturePrefabName) &&
-               CreatureIconVariants.TryGetValue(shared, out Dictionary<string, int> variants) &&
-               variants.TryGetValue(creaturePrefabName, out variant) &&
-               IsIconVariantValid(shared, variant);
     }
 
     private static bool IsIconVariantValid(ItemDrop.ItemData.SharedData shared, int variant)
