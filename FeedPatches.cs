@@ -370,6 +370,42 @@ internal static class ItemDataGetIconPatch
     }
 }
 
+[HarmonyPatch(typeof(HotkeyBar), nameof(HotkeyBar.UpdateIcons))]
+internal static class HotkeyBarUpdateIconsPatch
+{
+    [HarmonyPriority(Priority.Last)]
+    private static void Postfix(HotkeyBar __instance)
+    {
+        if (__instance.m_items == null || __instance.m_elements == null)
+        {
+            return;
+        }
+
+        foreach (ItemDrop.ItemData item in __instance.m_items)
+        {
+            if ((object?)item == null)
+            {
+                continue;
+            }
+
+            int elementIndex = item.m_gridPos.x;
+            if (elementIndex < 0 ||
+                elementIndex >= __instance.m_elements.Count ||
+                !TamingOrbSystem.TryGetIcon(item, out Sprite? icon) ||
+                (object?)icon == null)
+            {
+                continue;
+            }
+
+            HotkeyBar.ElementData element = __instance.m_elements[elementIndex];
+            if (element?.m_icon != null && element.m_used)
+            {
+                element.m_icon.sprite = icon;
+            }
+        }
+    }
+}
+
 [HarmonyPatch(typeof(ItemDrop), nameof(ItemDrop.Load))]
 internal static class ItemDropLoadPatch
 {
@@ -394,6 +430,15 @@ internal static class CharacterHoverTextPatch
     private static void Postfix(Character __instance, ref string __result)
     {
         __result = FeedSystem.AugmentHoverText(__instance, __result);
+    }
+}
+
+[HarmonyPatch(typeof(EggGrow), nameof(EggGrow.GetHoverText))]
+internal static class EggGrowHoverTextPatch
+{
+    private static void Postfix(EggGrow __instance, ref string __result)
+    {
+        __result = FeedSystem.AugmentEggGrowHoverText(__instance, __result);
     }
 }
 

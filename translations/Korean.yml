@@ -56,3 +56,5 @@ flg_mead_tamer_tooltip_passive_tame: "패시브 길들이기 속도: <color=oran
 flg_mead_tamer_tooltip_passive_growth: "패시브 성장 속도: <color=orange>{0}</color>"
 flg_mead_tamer_tooltip_feed: "먹이 효율: <color=orange>{0}</color>"
 flg_mead_tamer_tooltip_feed_note: "먹이 효율은 수동/자동 먹이의 길들이기, 성장, 레벨업, 회복, 포만 시간에 적용됩니다."
+flg_hover_hatching: "부화: {0}"
+flg_hover_needs_more_cover: "덮임이 더 필요합니다"

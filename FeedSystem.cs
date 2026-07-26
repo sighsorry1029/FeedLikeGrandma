@@ -54,6 +54,9 @@ internal static class FeedSystem
     private static string _hoverTextOriginal = string.Empty;
     private static string _hoverTextLanguage = string.Empty;
     private static string _hoverTextResult = string.Empty;
+    private static int _eggCoverTargetId;
+    private static int _eggCoverTimeBucket = -1;
+    private static bool _eggNeedsMoreCover;
 
     internal static void Shutdown()
     {
@@ -120,6 +123,7 @@ internal static class FeedSystem
         List<GameObject> loadedPrefabs = EnumerateLoadedPrefabs().ToList();
         FeedReferenceWriter.CaptureMissingReferenceSnapshots(loadedPrefabs);
         FeedReferenceWriter.RestoreReferenceSnapshots(loadedPrefabs);
+        ApplyGlobalEggHatchTimeMultiplier(loadedPrefabs);
 
         foreach (KeyValuePair<string, RawFeedingRule> entry in RawRules)
         {
@@ -578,6 +582,24 @@ internal static class FeedSystem
         ApplyConfiguredEggGrowData(prefab, rawRule);
     }
 
+    private static void ApplyGlobalEggHatchTimeMultiplier(IEnumerable<GameObject> prefabs)
+    {
+        float multiplier = Mathf.Clamp01(FeedLikeGrandmaPlugin.EggHatchTimeMultiplier.Value);
+        foreach (GameObject prefab in prefabs)
+        {
+            if ((object?)prefab == null)
+            {
+                continue;
+            }
+
+            EggGrow? eggGrow = prefab.GetComponent<EggGrow>();
+            if ((object?)eggGrow != null)
+            {
+                eggGrow.m_growTime = Mathf.Max(0f, eggGrow.m_growTime) * multiplier;
+            }
+        }
+    }
+
     private static bool IsEggGrowOnlyConfigRule(RawFeedingRule rawRule, EggGrow? eggGrow)
     {
         return (object?)eggGrow != null &&
@@ -909,6 +931,65 @@ internal static class FeedSystem
         return RememberHoverText(targetId, timeBucket, uiState, sourceText, language, result);
     }
 
+    internal static string AugmentEggGrowHoverText(EggGrow eggGrow, string originalText)
+    {
+        string sourceText = originalText ?? string.Empty;
+        if ((object?)eggGrow == null ||
+            (object?)eggGrow.m_nview == null ||
+            !eggGrow.m_nview.IsValid() ||
+            (object?)eggGrow.m_item == null ||
+            eggGrow.m_item.m_itemData.m_stack > 1)
+        {
+            return sourceText;
+        }
+
+        ZDO? zdo = eggGrow.m_nview.GetZDO();
+        float growStart = zdo?.GetFloat(ZDOVars.s_growStart, 0f) ?? 0f;
+        string line;
+        if (growStart > 0f)
+        {
+            if ((object?)ZNet.instance == null)
+            {
+                return sourceText;
+            }
+
+            double hatchAt = growStart + Math.Max(0f, eggGrow.m_growTime);
+            float remaining = (float)Math.Max(0d, hatchAt - ZNet.instance.GetTimeSeconds());
+            line = FeedLocalization.Format("$flg_hover_hatching", FormatDurationClock(remaining));
+        }
+        else if (eggGrow.m_requireUnderRoof && EggNeedsMoreCover(eggGrow))
+        {
+            line = FeedLocalization.Text("$flg_hover_needs_more_cover");
+        }
+        else
+        {
+            return sourceText;
+        }
+
+        string coloredLine = "<color=orange>" + line + "</color>";
+        return sourceText.Length == 0 ? coloredLine : sourceText + "\n" + coloredLine;
+    }
+
+    private static bool EggNeedsMoreCover(EggGrow eggGrow)
+    {
+        int targetId = eggGrow.GetInstanceID();
+        int timeBucket = Mathf.FloorToInt(Time.unscaledTime);
+        if (_eggCoverTargetId == targetId && _eggCoverTimeBucket == timeBucket)
+        {
+            return _eggNeedsMoreCover;
+        }
+
+        Cover.GetCoverForPoint(
+            eggGrow.transform.position,
+            out float coverPercentage,
+            out bool underRoof,
+            0.1f);
+        _eggCoverTargetId = targetId;
+        _eggCoverTimeBucket = timeBucket;
+        _eggNeedsMoreCover = !underRoof || coverPercentage < eggGrow.m_requireCoverPercentige;
+        return _eggNeedsMoreCover;
+    }
+
     private static int GetHoverTextUiState()
     {
         int state = FeedLikeGrandmaPlugin.ShowFeedingHelp.Value.IsOn() ? 1 : 0;
@@ -953,6 +1034,9 @@ internal static class FeedSystem
         _hoverTextOriginal = string.Empty;
         _hoverTextLanguage = string.Empty;
         _hoverTextResult = string.Empty;
+        _eggCoverTargetId = 0;
+        _eggCoverTimeBucket = -1;
+        _eggNeedsMoreCover = false;
     }
 
     internal static void UpdateHoverIcons(Player player)

@@ -32,7 +32,7 @@ internal enum RuntimeRefreshFlags
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.0.6";
+    internal const string ModVersion = "1.0.7";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -60,6 +60,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
     internal static ConfigEntry<int> LevelUpMaxLevel = null!;
     internal static ConfigEntry<float> LevelTamingTimeMultiplier = null!;
     internal static ConfigEntry<float> LevelFedDurationMultiplier = null!;
+    internal static ConfigEntry<float> EggHatchTimeMultiplier = null!;
     internal static ConfigEntry<Toggle> HorizontalProcreationLimit = null!;
     internal static ConfigEntry<string> FeedBarrelRecipe = null!;
     internal static ConfigEntry<FeedBarrelMaterial> FeedBarrelMaterialStyle = null!;
@@ -259,6 +260,9 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
         LevelFedDurationMultiplier = config(leveling, "Level Fed Duration Multiplier", 1.5f,
             new ConfigDescription("Scales tame.fedDuration by creature level for FLG's stacked fed gauge. Level 1 uses fedDuration; each higher level adds fedDuration * (value - 1).", new AcceptableValueRange<float>(1f, 10f)), order: 970);
+
+        EggHatchTimeMultiplier = config(leveling, "Egg Hatch Time Multiplier", 1f,
+            new ConfigDescription("Multiplier from x0 to x1 applied to EggGrow hatch times. x0 hatches on the next valid growth update and x1 keeps the original time. A prefab eggGrow value in feed.yml is used unchanged.", new AcceptableValueRange<float>(0f, 1f)), order: 960);
 
         MeadTamerTameMultiplier = config(meadTamer, "Passive Tame Multiplier", 2f,
             new ConfigDescription("Multiplier applied to passive taming speed while a nearby player has the TamingBoost status attribute. x2.0 means double speed.", new AcceptableValueRange<float>(1f, 6f)), order: 1000);
@@ -632,6 +636,11 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         FeedDragonFlightRestrictionSystem.OnRulesChanged();
     }
 
+    private static void OnFeedRuleConfigChanged(object sender, EventArgs e)
+    {
+        QueueRuntimeRefresh(RuntimeRefreshFlags.FeedRules);
+    }
+
     private static void SubscribeRuntimeConfigChanges()
     {
         TamingOrbRecipe.SettingChanged += OnTamingOrbConfigChanged;
@@ -640,6 +649,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         FeedBarrelMaterialStyle.SettingChanged += OnFeedBarrelConfigChanged;
         FeedBarrelContainerColumns.SettingChanged += OnFeedBarrelConfigChanged;
         FeedBarrelContainerRows.SettingChanged += OnFeedBarrelConfigChanged;
+        EggHatchTimeMultiplier.SettingChanged += OnFeedRuleConfigChanged;
         DefaultDragonRestrictedBiomes.SettingChanged += OnDragonFlightConfigChanged;
     }
 
@@ -651,6 +661,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         FeedBarrelMaterialStyle.SettingChanged -= OnFeedBarrelConfigChanged;
         FeedBarrelContainerColumns.SettingChanged -= OnFeedBarrelConfigChanged;
         FeedBarrelContainerRows.SettingChanged -= OnFeedBarrelConfigChanged;
+        EggHatchTimeMultiplier.SettingChanged -= OnFeedRuleConfigChanged;
         DefaultDragonRestrictedBiomes.SettingChanged -= OnDragonFlightConfigChanged;
     }
 

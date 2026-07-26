@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.7
+
+- Kept captured creature icons visible on the hotbar by refreshing Taming Orb icons after other hotbar updates.
+- Added the server-synced `Egg Hatch Time Multiplier`, while preserving explicit prefab `eggGrow` values from `feed.yml`.
+- Added remaining hatch time to warm egg hover text.
+- Added `Needs more cover` to cold eggs that specifically fail their required roof or cover conditions.
+
 ## 1.0.6
 
 - Fixed captured Taming Orbs becoming impossible to pick up after being dropped on dedicated servers.
