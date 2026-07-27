@@ -153,7 +153,14 @@ internal static class TamingOrbSystem
             return true;
         }
 
-        TryCapture(player, tameable, item);
+        Character? character = ((Component)tameable).GetComponentInParent<Character>();
+        if (character == null)
+        {
+            FeedLocalization.Message(player, "$flg_taming_orb_cannot_capture");
+            return true;
+        }
+
+        TryCapture(player, character, tameable, item);
         return true;
     }
 
@@ -177,14 +184,15 @@ internal static class TamingOrbSystem
         }
 
         GameObject? hoverObject = player.GetHoverObject();
-        Tameable? tameable = hoverObject == null ? null : hoverObject.GetComponentInParent<Tameable>();
-        if (tameable == null)
+        Character? character = hoverObject == null ? null : hoverObject.GetComponentInParent<Character>();
+        if (character == null)
         {
             FeedLocalization.Message(player, "$flg_taming_orb_use_on_tamed");
             return true;
         }
 
-        TryCapture(player, tameable, item);
+        Tameable? tameable = ((Component)character).GetComponent<Tameable>();
+        TryCapture(player, character, tameable, item);
         return true;
     }
 
@@ -230,23 +238,16 @@ internal static class TamingOrbSystem
         return originalText + $" ({GetPayloadDisplayName(payload!)})";
     }
 
-    private static bool TryCapture(Player player, Tameable tameable, ItemDrop.ItemData item)
+    private static bool TryCapture(Player player, Character character, Tameable? tameable, ItemDrop.ItemData item)
     {
-        if (tameable == null)
-        {
-            FeedLocalization.Message(player, "$flg_taming_orb_no_tameable");
-            return false;
-        }
-
         if (PendingItems.Contains(item))
         {
             FeedLocalization.Message(player, "$flg_taming_orb_pending");
             return true;
         }
 
-        Character? character = ((Component)tameable).GetComponent<Character>();
-        ZNetView? nview = ((Component)tameable).GetComponent<ZNetView>();
-        if (character == null || nview == null || !nview.IsValid())
+        ZNetView? nview = ((Component)character).GetComponent<ZNetView>();
+        if (nview == null || !nview.IsValid())
         {
             FeedLocalization.Message(player, "$flg_taming_orb_cannot_capture");
             return false;
@@ -284,7 +285,7 @@ internal static class TamingOrbSystem
         return true;
     }
 
-    private static IEnumerator CompleteCaptureAfterDelay(Player player, Tameable tameable, Character character, ZNetView nview, ItemDrop.ItemData item, string creaturePrefabName, float delay)
+    private static IEnumerator CompleteCaptureAfterDelay(Player player, Tameable? tameable, Character character, ZNetView nview, ItemDrop.ItemData item, string creaturePrefabName, float delay)
     {
         yield return new WaitForSeconds(delay);
         try
@@ -297,7 +298,7 @@ internal static class TamingOrbSystem
         }
     }
 
-    private static bool CompleteCapture(Player player, Tameable tameable, Character character, ZNetView nview, ItemDrop.ItemData item, string creaturePrefabName)
+    private static bool CompleteCapture(Player player, Tameable? tameable, Character character, ZNetView nview, ItemDrop.ItemData item, string creaturePrefabName)
     {
         if (player == null)
         {
@@ -311,7 +312,6 @@ internal static class TamingOrbSystem
         }
 
         if (character == null ||
-            tameable == null ||
             nview == null ||
             !nview.IsValid() ||
             character.IsDead() ||
@@ -510,7 +510,7 @@ internal static class TamingOrbSystem
         UnityEngine.Object.Instantiate(effectPrefab, position, rotation);
     }
 
-    private static CapturedTamePayload CapturePayload(Character character, Tameable tameable, ZNetView nview, string creaturePrefabName)
+    private static CapturedTamePayload CapturePayload(Character character, Tameable? tameable, ZNetView nview, string creaturePrefabName)
     {
         ZDO zdo = nview.GetZDO();
         long nowTicks = ZNet.instance.GetTime().Ticks;
@@ -525,7 +525,7 @@ internal static class TamingOrbSystem
             Level = Mathf.Max(1, character.GetLevel()),
             Health = Mathf.Max(1f, character.GetHealth()),
             MaxHealth = Mathf.Max(1f, character.GetMaxHealth()),
-            HasSaddle = tameable.HaveSaddle(),
+            HasSaddle = tameable != null && tameable.HaveSaddle(),
             Inventory = zdo.GetString(ZDOVars.s_items, string.Empty),
             LastFedAgeTicks = lastFedTicks > 0L ? Math.Max(0L, nowTicks - lastFedTicks) : 0L,
             SpawnAgeTicks = spawnTicks > 0L ? Math.Max(0L, nowTicks - spawnTicks) : 0L,

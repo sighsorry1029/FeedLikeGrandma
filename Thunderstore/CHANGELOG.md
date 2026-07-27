@@ -3,6 +3,7 @@
 ## 1.0.8
 
 - Kept the initial 5-meter Taming Orb capture requirement while allowing capture to finish if the player or creature moves away during the 4.5-second effect delay.
+- Allowed Taming Orbs to capture tamed growing creatures such as `Lox_Calf` that have a `Character` but no `Tameable` component, while preserving their growth progress without adding components.
 
 ## 1.0.7
 
