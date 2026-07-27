@@ -315,8 +315,7 @@ internal static class TamingOrbSystem
             nview == null ||
             !nview.IsValid() ||
             character.IsDead() ||
-            !character.IsTamed() ||
-            Vector3.Distance(player.transform.position, ((Component)character).transform.position) > CaptureRange)
+            !character.IsTamed())
         {
             FeedLocalization.Message(player, "$flg_taming_orb_no_longer_capturable");
             return false;

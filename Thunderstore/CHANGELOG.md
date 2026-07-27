@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.8
+
+- Kept the initial 5-meter Taming Orb capture requirement while allowing capture to finish if the player or creature moves away during the 4.5-second effect delay.
+
 ## 1.0.7
 
 - Kept captured creature icons visible on the hotbar by refreshing Taming Orb icons after other hotbar updates.
