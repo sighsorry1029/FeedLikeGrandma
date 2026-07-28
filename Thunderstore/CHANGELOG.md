@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.9
+
+- Registered Taming Orb and Feed Barrel prefabs synchronously with `ObjectDB` and `ZNetScene`, preventing saved custom items and pieces from being skipped during dedicated-server startup.
+- Preserved CreatureManager modifier powers, cooldowns, and accumulated state through Taming Orb capture and release using its versioned public API, with transactional failure handling and compatibility for existing v3 Orbs.
+
 ## 1.0.8
 
 - Kept the initial 5-meter Taming Orb capture requirement while allowing capture to finish if the player or creature moves away during the 4.5-second effect delay.

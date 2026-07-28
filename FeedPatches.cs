@@ -14,6 +14,7 @@ internal static class ObjectDbAwakePatch
     {
         TamingOrbSystem.OnGameDataChanged();
         FeedBarrelSystem.OnGameDataChanged();
+        FeedLikeGrandmaPlugin.RegisterPersistentPrefabsNow(__instance);
         FeedLikeGrandmaPlugin.QueueRuntimeRefresh(RuntimeRefreshFlags.All);
     }
 }
@@ -25,6 +26,7 @@ internal static class ObjectDbCopyPatch
     {
         TamingOrbSystem.OnGameDataChanged();
         FeedBarrelSystem.OnGameDataChanged();
+        FeedLikeGrandmaPlugin.RegisterPersistentPrefabsNow(__instance);
         FeedLikeGrandmaPlugin.QueueRuntimeRefresh(RuntimeRefreshFlags.All);
     }
 }
@@ -36,6 +38,7 @@ internal static class ZNetSceneAwakePatch
     {
         TamingOrbSystem.OnGameDataChanged();
         FeedBarrelSystem.OnGameDataChanged();
+        FeedLikeGrandmaPlugin.RegisterPersistentPrefabsNow(ObjectDB.instance);
         FeedLikeGrandmaPlugin.QueueRuntimeRefresh(RuntimeRefreshFlags.All);
     }
 }

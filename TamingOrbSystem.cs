@@ -16,6 +16,7 @@ internal static class TamingOrbSystem
 
     private const string RecipeName = "Recipe_FLG_TamingOrb";
     private const string PayloadKey = "flg.tame.payload";
+    private const string CreatureManagerStateKey = "flg.tame.creaturemanager";
     private const int PayloadVersion = 3;
     private const string DefaultSourcePrefabName = "DragonTear";
     private const string CllcEffectKey = "CL&LC effect";
@@ -323,10 +324,13 @@ internal static class TamingOrbSystem
 
         CapturedTamePayload payload;
         string serializedPayload;
+        string creatureManagerState;
         try
         {
             payload = CapturePayload(character, tameable, nview, creaturePrefabName);
             serializedPayload = payload.Serialize();
+            creatureManagerState =
+                FeedCreatureModifierCompatibility.CaptureCreatureManagerModifierState(character);
             try
             {
                 _ = GetIconVariantForPayload(item, payload);
@@ -364,10 +368,21 @@ internal static class TamingOrbSystem
         int previousStack = item.m_stack;
         int previousVariant = item.m_variant;
         bool hadPreviousPayload = item.m_customData.TryGetValue(PayloadKey, out string? previousPayload);
+        bool hadPreviousCreatureManagerState =
+            item.m_customData.TryGetValue(CreatureManagerStateKey, out string? previousCreatureManagerState);
         try
         {
             item.m_stack = 1;
             item.m_customData[PayloadKey] = serializedPayload;
+            if (string.IsNullOrWhiteSpace(creatureManagerState))
+            {
+                item.m_customData.Remove(CreatureManagerStateKey);
+            }
+            else
+            {
+                item.m_customData[CreatureManagerStateKey] = creatureManagerState;
+            }
+
             item.m_variant = 0;
             inventory.Changed();
             nview.Destroy();
@@ -383,6 +398,15 @@ internal static class TamingOrbSystem
             else
             {
                 item.m_customData.Remove(PayloadKey);
+            }
+
+            if (hadPreviousCreatureManagerState)
+            {
+                item.m_customData[CreatureManagerStateKey] = previousCreatureManagerState!;
+            }
+            else
+            {
+                item.m_customData.Remove(CreatureManagerStateKey);
             }
 
             inventory.Changed();
@@ -424,19 +448,47 @@ internal static class TamingOrbSystem
         }
 
         GetReleaseTransform(player, out Vector3 spawnPosition, out Quaternion spawnRotation);
+        string creatureManagerState = item.m_customData.TryGetValue(
+            CreatureManagerStateKey,
+            out string? storedCreatureManagerState)
+            ? storedCreatureManagerState
+            : string.Empty;
         PlayActionEffect(spawnPosition, spawnRotation);
         PendingItems.Add(item);
         FeedLocalization.Message(player, "$flg_taming_orb_releasing", GetPayloadDisplayName(payload));
-        FeedLikeGrandmaPlugin.Instance.StartCoroutine(CompleteReleaseAfterDelay(player, item, payload, creaturePrefab, spawnPosition, spawnRotation, ActionDelay));
+        FeedLikeGrandmaPlugin.Instance.StartCoroutine(CompleteReleaseAfterDelay(
+            player,
+            item,
+            payload,
+            creatureManagerState,
+            creaturePrefab,
+            spawnPosition,
+            spawnRotation,
+            ActionDelay));
         return true;
     }
 
-    private static IEnumerator CompleteReleaseAfterDelay(Player player, ItemDrop.ItemData item, CapturedTamePayload payload, GameObject creaturePrefab, Vector3 spawnPosition, Quaternion spawnRotation, float delay)
+    private static IEnumerator CompleteReleaseAfterDelay(
+        Player player,
+        ItemDrop.ItemData item,
+        CapturedTamePayload payload,
+        string creatureManagerState,
+        GameObject creaturePrefab,
+        Vector3 spawnPosition,
+        Quaternion spawnRotation,
+        float delay)
     {
         yield return new WaitForSeconds(delay);
         try
         {
-            CompleteRelease(player, item, payload, creaturePrefab, spawnPosition, spawnRotation);
+            CompleteRelease(
+                player,
+                item,
+                payload,
+                creatureManagerState,
+                creaturePrefab,
+                spawnPosition,
+                spawnRotation);
         }
         finally
         {
@@ -444,14 +496,31 @@ internal static class TamingOrbSystem
         }
     }
 
-    private static bool CompleteRelease(Player player, ItemDrop.ItemData item, CapturedTamePayload payload, GameObject creaturePrefab, Vector3 spawnPosition, Quaternion spawnRotation)
+    private static bool CompleteRelease(
+        Player player,
+        ItemDrop.ItemData item,
+        CapturedTamePayload payload,
+        string creatureManagerState,
+        GameObject creaturePrefab,
+        Vector3 spawnPosition,
+        Quaternion spawnRotation)
     {
         if (player == null || !player.GetInventory().ContainsItem(item))
         {
             return false;
         }
 
-        if (!TryReadPayload(item, out CapturedTamePayload? currentPayload) || currentPayload!.Serialize() != payload.Serialize())
+        string currentCreatureManagerState = item.m_customData.TryGetValue(
+            CreatureManagerStateKey,
+            out string? storedCreatureManagerState)
+            ? storedCreatureManagerState
+            : string.Empty;
+        if (!TryReadPayload(item, out CapturedTamePayload? currentPayload) ||
+            currentPayload!.Serialize() != payload.Serialize() ||
+            !string.Equals(
+                currentCreatureManagerState,
+                creatureManagerState,
+                StringComparison.Ordinal))
         {
             FeedLocalization.Message(player, "$flg_taming_orb_data_changed");
             return false;
@@ -473,7 +542,18 @@ internal static class TamingOrbSystem
             }
 
             RestorePayload(payload, character, tameable, nview);
+            if (!string.IsNullOrWhiteSpace(creatureManagerState) &&
+                !FeedCreatureModifierCompatibility.RestoreCreatureManagerModifierState(
+                    character,
+                    creatureManagerState))
+            {
+                DestroySpawnedRelease(spawned);
+                FeedLocalization.Message(player, "$flg_taming_orb_data_invalid");
+                return false;
+            }
+
             item.m_customData.Remove(PayloadKey);
+            item.m_customData.Remove(CreatureManagerStateKey);
             item.m_variant = 0;
             player.GetInventory().Changed();
 

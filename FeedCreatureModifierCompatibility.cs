@@ -16,6 +16,8 @@ internal static class FeedCreatureModifierCompatibility
     private static MethodInfo? _cllcSetExtraEffectCreature;
     private static bool _creatureManagerApiResolved;
     private static MethodInfo? _creatureManagerInheritModifiers;
+    private static MethodInfo? _creatureManagerCaptureModifierState;
+    private static MethodInfo? _creatureManagerRestoreModifierState;
 
     internal static void Shutdown()
     {
@@ -29,6 +31,8 @@ internal static class FeedCreatureModifierCompatibility
         _cllcSetExtraEffectCreature = null;
         _creatureManagerApiResolved = false;
         _creatureManagerInheritModifiers = null;
+        _creatureManagerCaptureModifierState = null;
+        _creatureManagerRestoreModifierState = null;
     }
 
     internal static void CaptureCllcModifiers(Character character, out string infusion, out string extraEffect)
@@ -92,6 +96,49 @@ internal static class FeedCreatureModifierCompatibility
         catch (Exception ex)
         {
             FeedLikeGrandmaPlugin.Log.LogDebug($"Could not inherit CreatureManager modifiers during growth: {ex.Message}");
+        }
+    }
+
+    internal static string CaptureCreatureManagerModifierState(Character character)
+    {
+        ResolveCreatureManagerApi();
+        if (_creatureManagerCaptureModifierState == null)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return _creatureManagerCaptureModifierState.Invoke(null, new object[] { character }) as string ??
+                   string.Empty;
+        }
+        catch (Exception ex)
+        {
+            FeedLikeGrandmaPlugin.Log.LogDebug(
+                $"Could not capture CreatureManager modifier state: {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    internal static bool RestoreCreatureManagerModifierState(Character character, string serializedState)
+    {
+        ResolveCreatureManagerApi();
+        if (_creatureManagerRestoreModifierState == null || string.IsNullOrWhiteSpace(serializedState))
+        {
+            return false;
+        }
+
+        try
+        {
+            return _creatureManagerRestoreModifierState.Invoke(
+                null,
+                new object[] { character, serializedState }) is true;
+        }
+        catch (Exception ex)
+        {
+            FeedLikeGrandmaPlugin.Log.LogDebug(
+                $"Could not restore CreatureManager modifier state: {ex.Message}");
+            return false;
         }
     }
 
@@ -201,11 +248,24 @@ internal static class FeedCreatureModifierCompatibility
             .GetAssemblies()
             .FirstOrDefault(loaded => loaded.GetName().Name == "CreatureManager");
         Type? modifierManager = assembly?.GetType("CreatureManager.CreatureModifierManager");
+        Type? modifierApi = assembly?.GetType("CreatureManager.CreatureManagerModifierApi");
         _creatureManagerInheritModifiers = modifierManager?.GetMethod(
             "InheritModifiers",
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
             null,
             new[] { typeof(Character), typeof(Character) },
+            null);
+        _creatureManagerCaptureModifierState = modifierApi?.GetMethod(
+            "CaptureModifierState",
+            BindingFlags.Public | BindingFlags.Static,
+            null,
+            new[] { typeof(Character) },
+            null);
+        _creatureManagerRestoreModifierState = modifierApi?.GetMethod(
+            "RestoreModifierState",
+            BindingFlags.Public | BindingFlags.Static,
+            null,
+            new[] { typeof(Character), typeof(string) },
             null);
     }
 }
