@@ -32,7 +32,7 @@ internal enum RuntimeRefreshFlags
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.0.9";
+    internal const string ModVersion = "1.1.0";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -576,9 +576,19 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
     {
         TryRefreshRuntime(
             "Taming Orb registration",
-            () => TamingOrbSystem.RegisterPrefabsAndRecipes(objectDb));
+            () => TamingOrbSystem.RegisterPersistentPrefab(objectDb));
         TryRefreshRuntime(
             "Feed Barrel registration",
+            () => FeedBarrelSystem.RegisterPersistentPrefab(objectDb));
+    }
+
+    internal static void RegisterConfiguredContentNow(ObjectDB? objectDb = null)
+    {
+        TryRefreshRuntime(
+            "Taming Orb recipe registration",
+            () => TamingOrbSystem.RegisterPrefabsAndRecipes(objectDb));
+        TryRefreshRuntime(
+            "Feed Barrel build registration",
             () => FeedBarrelSystem.RegisterPrefabsAndPieces(objectDb));
     }
 

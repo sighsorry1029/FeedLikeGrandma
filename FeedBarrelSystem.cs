@@ -41,21 +41,41 @@ internal static class FeedBarrelSystem
 
     internal static void RegisterPrefabsAndPieces(ObjectDB? objectDb = null)
     {
-        GameObject? prefab = EnsurePrefab();
+        objectDb ??= ObjectDB.instance;
+        GameObject? prefab = RegisterPersistentPrefabCore(objectDb, configureBuildRequirements: true);
         if ((object?)prefab == null)
         {
             return;
         }
 
-        ConfigurePrefab(prefab, objectDb ?? ObjectDB.instance);
+        RegisterWithHammer(objectDb, prefab);
+    }
 
+    internal static void RegisterPersistentPrefab(ObjectDB? objectDb = null)
+    {
+        RegisterPersistentPrefabCore(
+            objectDb ?? ObjectDB.instance,
+            configureBuildRequirements: false);
+    }
+
+    private static GameObject? RegisterPersistentPrefabCore(
+        ObjectDB? objectDb,
+        bool configureBuildRequirements)
+    {
+        GameObject? prefab = EnsurePrefab();
+        if ((object?)prefab == null)
+        {
+            return null;
+        }
+
+        ConfigurePrefab(prefab, objectDb, configureBuildRequirements);
         if ((object?)ZNetScene.instance != null)
         {
             RegisterWithZNetScene(ZNetScene.instance, prefab);
         }
 
-        RegisterWithHammer(objectDb ?? ObjectDB.instance, prefab);
         FeedAutoFeedSystem.RefreshRegisteredContainerSizes();
+        return prefab;
     }
 
     internal static bool IsFeedBarrel(Container? container)
@@ -114,7 +134,10 @@ internal static class FeedBarrelSystem
         return _prefab;
     }
 
-    private static void ConfigurePrefab(GameObject prefab, ObjectDB? objectDb)
+    private static void ConfigurePrefab(
+        GameObject prefab,
+        ObjectDB? objectDb,
+        bool configureBuildRequirements)
     {
         Piece? piece = prefab.GetComponent<Piece>();
         if ((object?)piece != null)
@@ -128,7 +151,7 @@ internal static class FeedBarrelSystem
             StoreOriginalMaterials(prefab);
             ApplyConfiguredMaterial(prefab, piece);
 
-            if ((object?)objectDb != null)
+            if (configureBuildRequirements && (object?)objectDb != null)
             {
                 piece.m_resources = enabled
                     ? BuildRequirements(objectDb, FeedLikeGrandmaPlugin.FeedBarrelRecipe.Value).ToArray()

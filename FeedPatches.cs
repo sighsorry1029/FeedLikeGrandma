@@ -26,7 +26,7 @@ internal static class ObjectDbCopyPatch
     {
         TamingOrbSystem.OnGameDataChanged();
         FeedBarrelSystem.OnGameDataChanged();
-        FeedLikeGrandmaPlugin.RegisterPersistentPrefabsNow(__instance);
+        FeedLikeGrandmaPlugin.RegisterConfiguredContentNow(__instance);
         FeedLikeGrandmaPlugin.QueueRuntimeRefresh(RuntimeRefreshFlags.All);
     }
 }

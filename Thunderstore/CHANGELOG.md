@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0
+
+- Kept synchronous Taming Orb and Feed Barrel prefab registration for dedicated-server persistence while deferring recipe and build-cost binding until the full `ObjectDB` is available, eliminating false missing-vanilla-ingredient warnings during startup.
+
 ## 1.0.9
 
 - Registered Taming Orb and Feed Barrel prefabs synchronously with `ObjectDB` and `ZNetScene`, preventing saved custom items and pieces from being skipped during dedicated-server startup.
