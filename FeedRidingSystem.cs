@@ -67,7 +67,7 @@ internal static class FeedRidingSystem
         }
 
         Sadle? saddle = character.m_baseAI?.m_tamable?.m_saddle;
-        return (object?)saddle != null && saddle.IsLocalUser() && IsLocalRiderEncumbered();
+        return IsLocalRiderEncumbered(saddle);
     }
 
     internal static void ApplyStaminaCostMultiplier(Sadle saddle, ref float staminaCost)
@@ -80,7 +80,7 @@ internal static class FeedRidingSystem
             return;
         }
 
-        float multiplier = IsLocalRiderEncumbered()
+        float multiplier = IsLocalRiderEncumbered(saddle)
             ? FeedLikeGrandmaPlugin.EncumberedMountStaminaDrainMultiplier.Value
             : FeedLikeGrandmaPlugin.MountStaminaDrainMultiplier.Value;
         staminaCost *= Mathf.Max(0f, multiplier);
@@ -95,7 +95,7 @@ internal static class FeedRidingSystem
             RegenHungry = saddle.m_staminaRegenHungry
         };
 
-        float multiplier = IsLocalRiderEncumbered()
+        float multiplier = IsLocalRiderEncumbered(saddle)
             ? FeedLikeGrandmaPlugin.EncumberedMountStaminaRegenMultiplier.Value
             : FeedLikeGrandmaPlugin.MountStaminaRegenMultiplier.Value;
         float ridingSkill = Mathf.Clamp01(saddle.GetRiderSkill());
@@ -123,13 +123,18 @@ internal static class FeedRidingSystem
             FeedLikeGrandmaPlugin.EncumberedWalkStaminaDrain.Value != FeedLikeGrandmaPlugin.Toggle.On ||
             (object?)saddle == null ||
             saddle.m_speed != Sadle.Speed.Walk ||
-            !IsLocalRiderEncumbered())
+            !IsLocalRiderEncumbered(saddle))
         {
             return;
         }
 
         float riderSkillRatio = Mathf.Lerp(1f, 0.5f, saddle.GetRiderSkill());
         saddle.UseStamina(saddle.m_runStaminaDrain * riderSkillRatio * dt);
+    }
+
+    private static bool IsLocalRiderEncumbered(Sadle? saddle)
+    {
+        return (object?)saddle != null && saddle.IsLocalUser() && IsLocalRiderEncumbered();
     }
 
     internal readonly struct StaminaRegenState

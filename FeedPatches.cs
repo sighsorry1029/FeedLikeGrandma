@@ -7,6 +7,16 @@ using UnityEngine;
 
 namespace FeedLikeGrandma;
 
+[HarmonyPatch(typeof(ZNet), nameof(ZNet.Awake))]
+internal static class ZNetAwakePatch
+{
+    private static void Postfix()
+    {
+        FeedSystem.RegisterManualFeedNetworkRpcs();
+        TamingOrbSystem.RegisterNetworkRpcs();
+    }
+}
+
 [HarmonyPatch(typeof(ObjectDB), nameof(ObjectDB.Awake))]
 internal static class ObjectDbAwakePatch
 {
@@ -58,7 +68,6 @@ internal static class ZNetViewOnDestroyPatch
     private static void Prefix(ZNetView __instance)
     {
         FeedProcreationSystem.DeregisterSpawnedInstance(__instance);
-        FeedSystem.DeregisterView(__instance);
     }
 }
 
@@ -67,26 +76,9 @@ internal static class PlayerAwakePatch
 {
     private static void Postfix(Player __instance)
     {
+        FeedSystem.RegisterManualFeedNetworkRpcs();
+        TamingOrbSystem.RegisterNetworkRpcs();
         FeedLikeGrandmaPlugin.QueueRuntimeRefresh(RuntimeRefreshFlags.FeedBarrel);
-        FeedSystem.RegisterPlayerRpc(__instance);
-    }
-}
-
-[HarmonyPatch(typeof(Tameable), nameof(Tameable.Awake))]
-internal static class TameableAwakePatch
-{
-    private static void Postfix(Tameable __instance)
-    {
-        FeedSystem.RegisterTargetRpc(__instance.m_nview);
-    }
-}
-
-[HarmonyPatch(typeof(Growup), nameof(Growup.Start))]
-internal static class GrowupStartPatch
-{
-    private static void Postfix(Growup __instance)
-    {
-        FeedSystem.RegisterTargetRpc(__instance.m_nview);
     }
 }
 

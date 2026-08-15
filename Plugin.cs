@@ -32,7 +32,7 @@ internal enum RuntimeRefreshFlags
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.1.0";
+    internal const string ModVersion = "1.1.1";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -99,6 +99,11 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
     private Coroutine? _runtimeRefreshCoroutine;
     private int _runtimeRefreshGeneration;
     private bool _isShuttingDown;
+    private bool _runtimeConfigChangesSubscribed;
+    private bool _syncedYamlChangedSubscribed;
+    private bool _sourceOfTruthChangedSubscribed;
+    private bool _harmonyPatched;
+    private bool _shutdownCompleted;
     public enum Toggle
     {
         On = 1,
@@ -124,36 +129,66 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
         bool originalSaveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
-
-        BindConfigEntries();
-        SubscribeRuntimeConfigChanges();
-        EnsureYamlFileExists();
-
-        SyncedYaml = new CustomSyncedValue<string>(ConfigSync, "YamlText", string.Empty);
-        SyncedYaml.ValueChanged += OnSyncedYamlChanged;
-        ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
-
-        FeedConsoleCommands.Register();
-        LoadAndRefreshFeedRules(File.ReadAllText(YamlFileFullPath), "local fallback");
-
-        _ = ConfigSync.AddLockingConfigEntry(ServerConfigLocked);
-
-        _harmony.PatchAll(Assembly.GetExecutingAssembly());
-
-        if (ConfigSync.IsSourceOfTruth)
+        try
         {
-            PushLocalYamlToSync();
-        }
+            BindConfigEntries();
+            _runtimeConfigChangesSubscribed = true;
+            SubscribeRuntimeConfigChanges();
+            EnsureYamlFileExists();
 
-        Config.Save();
-        Config.SaveOnConfigSet = originalSaveOnSet;
-        SetupWatchers();
+            SyncedYaml = new CustomSyncedValue<string>(ConfigSync, "YamlText", string.Empty);
+            SyncedYaml.ValueChanged += OnSyncedYamlChanged;
+            _syncedYamlChangedSubscribed = true;
+            ConfigSync.SourceOfTruthChanged += OnSourceOfTruthChanged;
+            _sourceOfTruthChangedSubscribed = true;
+
+            FeedConsoleCommands.Register();
+            LoadAndRefreshFeedRules(File.ReadAllText(YamlFileFullPath), "local fallback");
+
+            _ = ConfigSync.AddLockingConfigEntry(ServerConfigLocked);
+
+            _harmonyPatched = true;
+            _harmony.PatchAll(Assembly.GetExecutingAssembly());
+
+            if (ConfigSync.IsSourceOfTruth)
+            {
+                PushLocalYamlToSync();
+            }
+
+            Config.Save();
+            SetupWatchers();
+        }
+        catch
+        {
+            ShutdownRuntime();
+            throw;
+        }
+        finally
+        {
+            Config.SaveOnConfigSet = originalSaveOnSet;
+        }
     }
 
     private void OnDestroy()
     {
+        ShutdownRuntime();
+    }
+
+    private void ShutdownRuntime()
+    {
+        if (_shutdownCompleted)
+        {
+            return;
+        }
+
+        _shutdownCompleted = true;
         _isShuttingDown = true;
-        UnsubscribeRuntimeConfigChanges();
+        if (_runtimeConfigChangesSubscribed)
+        {
+            UnsubscribeRuntimeConfigChanges();
+            _runtimeConfigChangesSubscribed = false;
+        }
+
         if (_runtimeRefreshCoroutine != null)
         {
             StopCoroutine(_runtimeRefreshCoroutine);
@@ -174,8 +209,18 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
         _pendingRuntimeRefresh = RuntimeRefreshFlags.None;
 
-        SyncedYaml.ValueChanged -= OnSyncedYamlChanged;
-        ConfigSync.SourceOfTruthChanged -= OnSourceOfTruthChanged;
+        if (_syncedYamlChangedSubscribed && SyncedYaml != null)
+        {
+            SyncedYaml.ValueChanged -= OnSyncedYamlChanged;
+            _syncedYamlChangedSubscribed = false;
+        }
+
+        if (_sourceOfTruthChangedSubscribed)
+        {
+            ConfigSync.SourceOfTruthChanged -= OnSourceOfTruthChanged;
+            _sourceOfTruthChangedSubscribed = false;
+        }
+
         TamingOrbSystem.Shutdown();
         FeedBetterRidingCompatibility.Shutdown();
         FeedDragonFlightRestrictionSystem.Shutdown();
@@ -188,8 +233,14 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         FeedReferenceWriter.Shutdown();
         FeedExternalReferenceSupport.Shutdown();
         _yamlWatcher?.Dispose();
+        _yamlWatcher = null;
         _configWatcher?.Dispose();
-        _harmony.UnpatchSelf();
+        _configWatcher = null;
+        if (_harmonyPatched)
+        {
+            _harmony.UnpatchSelf();
+            _harmonyPatched = false;
+        }
     }
 
     private void BindConfigEntries()

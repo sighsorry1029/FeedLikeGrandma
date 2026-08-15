@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+- Reworked manual feeding into a server-coordinated two-phase transaction with exact inventory reservations, target locks, idempotent retries, and owner-migration handling for reliable dedicated-server multiplayer.
+- Made Taming Orb capture and release server-approved, preserving owner-authored creature state and verifying released network objects before clearing an Orb to prevent duplication and stale state.
+- Blocked player-spawned creatures from Taming Orb capture and hardened YAML validation, runtime cleanup, riding checks, and the separated Orb icon pipeline.
+
 ## 1.1.0
 
 - Kept synchronous Taming Orb and Feed Barrel prefab registration for dedicated-server persistence while deferring recipe and build-cost binding until the full `ObjectDB` is available, eliminating false missing-vanilla-ingredient warnings during startup.

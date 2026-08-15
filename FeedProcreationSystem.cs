@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -205,19 +204,9 @@ internal static class FeedProcreationSystem
             return 0;
         }
 
-        string prefabName = NormalizePrefabName(prefab.name);
+        string prefabName = Utils.GetPrefabName(prefab.name);
         return string.IsNullOrWhiteSpace(prefabName)
             ? 0
             : StringExtensionMethods.GetStableHashCode(prefabName);
-    }
-
-    private static string NormalizePrefabName(string name)
-    {
-        int parenthesisIndex = name.IndexOf('(');
-        int spaceIndex = name.IndexOf(' ');
-        int index = parenthesisIndex < 0
-            ? spaceIndex
-            : spaceIndex < 0 ? parenthesisIndex : Math.Min(parenthesisIndex, spaceIndex);
-        return index >= 0 ? name.Substring(0, index) : name;
     }
 }

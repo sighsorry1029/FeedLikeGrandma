@@ -12,33 +12,24 @@ internal sealed class FeedConsumeData
     public List<ItemDrop> ConsumeItems { get; init; } = new();
 }
 
-internal static class FeedSystem
+internal static partial class FeedSystem
 {
-    private static readonly int StarProgressHash = StringExtensionMethods.GetStableHashCode("flg_star_progress");
+    internal static readonly int StarProgressHash = StringExtensionMethods.GetStableHashCode("flg_star_progress");
     private static readonly int LevelScaledTameTotalHash = StringExtensionMethods.GetStableHashCode("flg_level_scaled_tame_total");
     private static readonly int LevelScaledTameBaseHash = StringExtensionMethods.GetStableHashCode("flg_level_scaled_tame_base");
     private static readonly int LevelScaledTameFactorHash = StringExtensionMethods.GetStableHashCode("flg_level_scaled_tame_factor");
     private static readonly int LevelScaledTameLevelHash = StringExtensionMethods.GetStableHashCode("flg_level_scaled_tame_level");
-    private static readonly int GrowthElapsedHash = StringExtensionMethods.GetStableHashCode("flg_growth_elapsed");
-    private static readonly int GrowthLastEvalHash = StringExtensionMethods.GetStableHashCode("flg_growth_last_eval");
+    internal static readonly int GrowthElapsedHash = StringExtensionMethods.GetStableHashCode("flg_growth_elapsed");
+    internal static readonly int GrowthLastEvalHash = StringExtensionMethods.GetStableHashCode("flg_growth_last_eval");
     private static readonly int FeedCooldownHash = StringExtensionMethods.GetStableHashCode("flg_feed_cooldown");
 
     private const float MeadBoostRange = 60f;
-    private const string FeedRequestRpc = "FLG_FeedRequest";
-    private const string FeedResponseRpc = "FLG_FeedResponse";
     private const string TamedProgressionEffectPrefab = "fx_creature_tamed";
-    private const long PendingRequestTimeoutTicks = TimeSpan.TicksPerSecond * 30;
-    private const long CompletedRequestRetentionTicks = TimeSpan.TicksPerSecond * 60;
-    private const int MaxCompletedRequestCacheEntries = 1024;
     private const float FeedRequestDistanceTolerance = 1f;
 
     private static readonly Dictionary<string, RawFeedingRule> RawRules = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, float> FoodNumbers = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, ResolvedFeedingRule> ResolvedRules = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly Dictionary<int, PendingFeedRequest> PendingRequests = new();
-    private static readonly Dictionary<(long Sender, int RequestId), CompletedFeedRequest> CompletedFeedRequests = new();
-    private static readonly HashSet<int> RegisteredTargetViews = new();
-    private static readonly HashSet<int> RegisteredPlayerViews = new();
     private static readonly List<Player> NearbyTamingBoostPlayers = new();
     private static readonly HashSet<string> ExcludedPrefabNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -47,7 +38,6 @@ internal static class FeedSystem
     };
 
     private static RawFeedValues FeedDefaults = new();
-    private static int _nextRequestId = 1;
     private static int _hoverTextTargetId;
     private static int _hoverTextTimeBucket = -1;
     private static int _hoverTextUiState = -1;
@@ -63,28 +53,42 @@ internal static class FeedSystem
         RawRules.Clear();
         FoodNumbers.Clear();
         ResolvedRules.Clear();
-        PendingRequests.Clear();
-        CompletedFeedRequests.Clear();
-        RegisteredTargetViews.Clear();
-        RegisteredPlayerViews.Clear();
+        ShutdownManualFeedTransactions();
         NearbyTamingBoostPlayers.Clear();
         FeedDefaults = new RawFeedValues();
-        _nextRequestId = 1;
         InvalidateHoverTextCache();
     }
 
     internal static bool LoadYamlText(string yamlText, string source)
     {
         List<string> warnings = new();
+        List<string> errors = new();
         RawFeedConfig parsedConfig;
 
         try
         {
-            parsedConfig = FeedingYamlParser.Parse(yamlText, warnings);
+            parsedConfig = FeedingYamlParser.Parse(yamlText, warnings, errors);
         }
         catch (Exception ex)
         {
             FeedLikeGrandmaPlugin.Log.LogError($"Failed to parse YAML from {source}: {ex}");
+            return false;
+        }
+
+        foreach (string warning in warnings)
+        {
+            FeedLikeGrandmaPlugin.Log.LogWarning(warning);
+        }
+
+        if (errors.Count > 0)
+        {
+            foreach (string error in errors)
+            {
+                FeedLikeGrandmaPlugin.Log.LogError(error);
+            }
+
+            FeedLikeGrandmaPlugin.Log.LogWarning(
+                $"Rejected FeedLikeGrandma YAML from {source}; the previous runtime rules remain active.");
             return false;
         }
 
@@ -102,10 +106,6 @@ internal static class FeedSystem
         }
 
         FeedLikeGrandmaPlugin.Log.LogInfo($"Loaded {RawRules.Count} feed rule(s) and {FoodNumbers.Count} global food number(s) from {source}.");
-        foreach (string warning in warnings)
-        {
-            FeedLikeGrandmaPlugin.Log.LogWarning(warning);
-        }
 
         return true;
     }
@@ -121,26 +121,32 @@ internal static class FeedSystem
 
         FeedExternalReferenceSupport.RefreshSnapshot();
         List<GameObject> loadedPrefabs = EnumerateLoadedPrefabs().ToList();
+        Dictionary<string, GameObject> loadedPrefabsByName = new(StringComparer.OrdinalIgnoreCase);
+        foreach (GameObject prefab in loadedPrefabs)
+        {
+            loadedPrefabsByName[NormalizePrefabName(prefab.name)] = prefab;
+        }
+
         FeedReferenceWriter.CaptureMissingReferenceSnapshots(loadedPrefabs);
         FeedReferenceWriter.RestoreReferenceSnapshots(loadedPrefabs);
         ApplyGlobalEggHatchTimeMultiplier(loadedPrefabs);
 
         foreach (KeyValuePair<string, RawFeedingRule> entry in RawRules)
         {
-            GameObject? prefab = FindLoadedPrefab(entry.Key, loadedPrefabs);
+            GameObject? prefab = FindLoadedPrefab(entry.Key, loadedPrefabsByName);
             if ((object?)prefab != null && !ShouldIgnorePrefab(prefab))
             {
                 ApplyConfiguredPrefabData(prefab, entry.Value);
             }
         }
 
-        ApplyInheritedConsumeItemsForLoadedPrefabs();
+        ApplyInheritedConsumeItemsForLoadedPrefabs(loadedPrefabs);
 
         foreach (KeyValuePair<string, RawFeedingRule> entry in RawRules)
         {
             string prefabName = entry.Key;
             RawFeedingRule rawRule = entry.Value;
-            GameObject? prefab = FindLoadedPrefab(prefabName, loadedPrefabs);
+            GameObject? prefab = FindLoadedPrefab(prefabName, loadedPrefabsByName);
             if ((object?)prefab == null)
             {
                 FeedLikeGrandmaPlugin.Log.LogWarning($"Configured prefab '{prefabName}' was not found in loaded prefabs.");
@@ -175,19 +181,9 @@ internal static class FeedSystem
 
     }
 
-    internal static void DeregisterView(ZNetView? nview)
-    {
-        if ((object?)nview == null)
-        {
-            return;
-        }
-
-        int instanceId = nview.GetInstanceID();
-        RegisteredTargetViews.Remove(instanceId);
-        RegisteredPlayerViews.Remove(instanceId);
-    }
-
-    private static GameObject? FindLoadedPrefab(string prefabName, IEnumerable<GameObject> loadedPrefabs)
+    private static GameObject? FindLoadedPrefab(
+        string prefabName,
+        IReadOnlyDictionary<string, GameObject> loadedPrefabsByName)
     {
         string normalizedName = NormalizePrefabName(prefabName);
         GameObject? prefab = ZNetScene.instance?.GetPrefab(normalizedName);
@@ -196,9 +192,9 @@ internal static class FeedSystem
             return prefab;
         }
 
-        return loadedPrefabs.FirstOrDefault(candidate =>
-            (object?)candidate != null &&
-            NormalizePrefabName(candidate.name).Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
+        return loadedPrefabsByName.TryGetValue(normalizedName, out GameObject loadedPrefab)
+            ? loadedPrefab
+            : null;
     }
 
     private static bool TryBuildResolvedRule(string prefabName, GameObject prefab, RawFeedingRule rawRule, bool explicitRule, out ResolvedFeedingRule? resolvedRule)
@@ -524,9 +520,9 @@ internal static class FeedSystem
         return false;
     }
 
-    private static void ApplyInheritedConsumeItemsForLoadedPrefabs()
+    private static void ApplyInheritedConsumeItemsForLoadedPrefabs(IEnumerable<GameObject> loadedPrefabs)
     {
-        foreach (GameObject prefab in EnumerateLoadedPrefabs())
+        foreach (GameObject prefab in loadedPrefabs)
         {
             MonsterAI? monsterAI = prefab.GetComponent<MonsterAI>();
             if ((object?)monsterAI == null || HasConsumeItems(monsterAI))
@@ -756,38 +752,6 @@ internal static class FeedSystem
         }
 
         return 1f;
-    }
-
-    internal static void RegisterTargetRpc(ZNetView? nview)
-    {
-        if ((object?)nview == null || !nview.IsValid())
-        {
-            return;
-        }
-
-        int instanceId = nview.GetInstanceID();
-        if (!RegisteredTargetViews.Add(instanceId))
-        {
-            return;
-        }
-
-        nview.Register<ZPackage>(FeedRequestRpc, (sender, pkg) => ReceiveFeedRequest(nview, sender, pkg));
-    }
-
-    internal static void RegisterPlayerRpc(Player? player)
-    {
-        if ((object?)player == null || (object?)player.m_nview == null || !player.m_nview.IsValid())
-        {
-            return;
-        }
-
-        int instanceId = player.m_nview.GetInstanceID();
-        if (!RegisteredPlayerViews.Add(instanceId))
-        {
-            return;
-        }
-
-        player.m_nview.Register<ZPackage>(FeedResponseRpc, (sender, pkg) => ReceiveFeedResponse(player, sender, pkg));
     }
 
     internal static bool TryHandleTameableUseItem(Tameable tameable, Humanoid user, ItemDrop.ItemData item)
@@ -1254,188 +1218,7 @@ internal static class FeedSystem
 
     private static bool TryStartFeedRequest(Player player, GameObject targetObject, ItemDrop.ItemData item)
     {
-        if (!TryBuildContext(targetObject, out FeedTargetContext context))
-        {
-            return false;
-        }
-
-        if (!TryGetItemPrefabName(item, out string itemPrefabName))
-        {
-            return false;
-        }
-
-        int itemQuality = Mathf.Max(1, item.m_quality);
-        bool matchesDailyFood = FindMatchingFood(context.Rule.Foods, itemPrefabName, itemQuality) != null;
-        bool matchesLevelUpFood = TryGetLevelUpItems(context, out IReadOnlyList<ResolvedFoodEntry>? levelUpFoods) &&
-                                  levelUpFoods != null &&
-                                  FindMatchingFood(levelUpFoods, itemPrefabName, itemQuality) != null;
-        if (!matchesDailyFood && !matchesLevelUpFood)
-        {
-            return false;
-        }
-
-        if ((object?)context.BaseAI != null && context.BaseAI.IsAlerted())
-        {
-            FeedLocalization.Message(player, "$flg_feed_target_alerted", context.Character.GetHoverName());
-            return true;
-        }
-
-        long cooldownTicks = context.NView.GetZDO().GetLong(FeedCooldownHash, 0L);
-        long nowTicks = ZNet.instance.GetTime().Ticks;
-        if (cooldownTicks > nowTicks)
-        {
-            TimeSpan remaining = new(cooldownTicks - nowTicks);
-            FeedLocalization.Message(player, "$flg_feed_cooldown", remaining.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture));
-            return true;
-        }
-
-        CleanupPendingRequests(nowTicks);
-        int available = CountItemsByPrefab(player.GetInventory(), itemPrefabName, itemQuality);
-        int reserved = CountPendingItems(itemPrefabName, itemQuality);
-        int requestedAmount = Mathf.Min(
-            Mathf.Max(0, available - reserved),
-            FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
-        if (requestedAmount <= 0)
-        {
-            FeedLocalization.Message(player, "$flg_feed_no_matching_item");
-            return true;
-        }
-
-        int requestId = _nextRequestId++;
-        PendingRequests[requestId] = new PendingFeedRequest
-        {
-            ItemPrefabName = itemPrefabName,
-            ItemQuality = itemQuality,
-            TargetId = context.NView.GetZDO().m_uid,
-            ExpectedResponderId = context.NView.GetZDO().GetOwner(),
-            RequestedAmount = requestedAmount,
-            CreatedAtTicks = nowTicks
-        };
-
-        FeedRequestMessage request = new()
-        {
-            RequestId = requestId,
-            RequesterId = player.GetZDOID(),
-            ItemPrefabName = itemPrefabName,
-            ItemQuality = itemQuality,
-            RequestedAmount = requestedAmount
-        };
-
-        context.NView.InvokeRPC(FeedRequestRpc, request.Write());
-        return true;
-    }
-
-    private static void CleanupPendingRequests(long nowTicks)
-    {
-        if (PendingRequests.Count == 0)
-        {
-            return;
-        }
-
-        List<int>? expiredRequestIds = null;
-        foreach (KeyValuePair<int, PendingFeedRequest> entry in PendingRequests)
-        {
-            if (entry.Value.CreatedAtTicks <= 0L ||
-                nowTicks - entry.Value.CreatedAtTicks > PendingRequestTimeoutTicks)
-            {
-                expiredRequestIds ??= new List<int>();
-                expiredRequestIds.Add(entry.Key);
-            }
-        }
-
-        if (expiredRequestIds == null)
-        {
-            return;
-        }
-
-        foreach (int requestId in expiredRequestIds)
-        {
-            PendingRequests.Remove(requestId);
-        }
-    }
-
-    private static void ReceiveFeedRequest(ZNetView nview, long sender, ZPackage pkg)
-    {
-        if (!nview.IsOwner())
-        {
-            return;
-        }
-
-        if (!FeedRequestMessage.TryRead(pkg, out FeedRequestMessage? request) || request == null)
-        {
-            FeedLikeGrandmaPlugin.Log.LogDebug($"Ignored malformed feed request from peer {sender}.");
-            return;
-        }
-
-        Player? requester = FindPlayer(request.RequesterId);
-        if ((object?)requester?.m_nview == null || !requester.m_nview.IsValid())
-        {
-            return;
-        }
-
-        ZDO requesterZdo = requester.m_nview.GetZDO();
-        if (sender == 0L || (object?)requesterZdo == null || requesterZdo.GetOwner() != sender)
-        {
-            FeedLikeGrandmaPlugin.Log.LogWarning(
-                $"Ignored feed request {request.RequestId} whose sender does not own the requesting player.");
-            return;
-        }
-
-        if (request.RequestId <= 0 || string.IsNullOrWhiteSpace(request.ItemPrefabName) ||
-            request.ItemPrefabName.Length > 256 || request.ItemQuality <= 0 || request.RequestedAmount <= 0)
-        {
-            FeedLikeGrandmaPlugin.Log.LogDebug($"Ignored invalid feed request {request.RequestId} from peer {sender}.");
-            return;
-        }
-
-        ZDO targetZdo = nview.GetZDO();
-        ZDOID targetId = targetZdo.m_uid;
-        long nowTicks = ZNet.instance.GetTime().Ticks;
-        CleanupCompletedFeedRequests(nowTicks);
-        (long Sender, int RequestId) completedKey = (sender, request.RequestId);
-        if (CompletedFeedRequests.TryGetValue(completedKey, out CompletedFeedRequest? completed))
-        {
-            if (completed.Matches(request, targetId))
-            {
-                requester.m_nview.InvokeRPC(FeedResponseRpc, completed.Response.Write());
-            }
-            else
-            {
-                FeedLikeGrandmaPlugin.Log.LogWarning(
-                    $"Ignored reused feed request id {request.RequestId} from peer {sender} with different request data.");
-            }
-
-            return;
-        }
-
-        GameObject targetObject = ((Component)nview).gameObject;
-        FeedResponseMessage response;
-        if (!IsRequesterInFeedRange(requester, targetObject))
-        {
-            response = new FeedResponseMessage
-            {
-                RequestId = request.RequestId,
-                ItemPrefabName = request.ItemPrefabName,
-                TargetId = targetId,
-                Message = FeedLocalization.Text("$flg_feed_too_far")
-            };
-        }
-        else
-        {
-            response = ProcessFeedRequest(targetObject, request, requester);
-        }
-
-        StoreCompletedFeedRequest(completedKey, new CompletedFeedRequest
-        {
-            RequesterId = request.RequesterId,
-            TargetId = targetId,
-            ItemPrefabName = request.ItemPrefabName,
-            ItemQuality = request.ItemQuality,
-            RequestedAmount = request.RequestedAmount,
-            CompletedAtTicks = nowTicks,
-            Response = response
-        });
-        requester.m_nview.InvokeRPC(FeedResponseRpc, response.Write());
+        return TryStartManualFeedTransaction(player, targetObject, item);
     }
 
     private static FeedResponseMessage ProcessFeedRequest(
@@ -1443,68 +1226,14 @@ internal static class FeedSystem
         FeedRequestMessage request,
         Player requester)
     {
-        FeedResponseMessage response = new()
+        if (!TryBuildManualFeedPlan(
+                targetObject,
+                request,
+                requester,
+                out FeedTargetContext context,
+                out FeedEffectPlan plan,
+                out FeedResponseMessage response))
         {
-            RequestId = request.RequestId,
-            ItemPrefabName = request.ItemPrefabName,
-            TargetId = ZDOID.None,
-            Message = string.Empty
-        };
-
-        if (!TryBuildContext(targetObject, out FeedTargetContext context))
-        {
-            response.Message = FeedLocalization.Text("$flg_feed_target_not_configured");
-            return response;
-        }
-
-        response.TargetId = context.NView.GetZDO().m_uid;
-        response.DisplayPosition = context.Character.GetTopPoint();
-
-        if ((object?)context.BaseAI != null && context.BaseAI.IsAlerted())
-        {
-            response.Message = FeedLocalization.Format("$flg_feed_target_alerted", context.Character.GetHoverName());
-            return response;
-        }
-
-        int requestQuality = Mathf.Max(1, request.ItemQuality);
-        if (!TryGetFeedEntriesForItem(context, request.ItemPrefabName, requestQuality, out ResolvedFoodEntry? dailyFood, out ResolvedFoodEntry? levelUpFood, out bool hasLevelUpItems))
-        {
-            response.Message = FeedLocalization.Text("$flg_feed_invalid_item");
-            return response;
-        }
-
-        int amount = Mathf.Min(request.RequestedAmount, FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
-        if (amount <= 0)
-        {
-            response.Message = FeedLocalization.Text("$flg_feed_no_items_consumed");
-            return response;
-        }
-
-        long nowTicks = ZNet.instance.GetTime().Ticks;
-        long cooldownUntilTicks = context.NView.GetZDO().GetLong(FeedCooldownHash, 0L);
-        if (cooldownUntilTicks > nowTicks)
-        {
-            TimeSpan remaining = new(cooldownUntilTicks - nowTicks);
-            response.Message = FeedLocalization.Format("$flg_feed_cooldown", remaining.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture));
-            return response;
-        }
-
-        bool requesterHasTamingBoost = requester.GetSEMan()
-            .HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost);
-        float feedMultiplier = requesterHasTamingBoost
-            ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier()
-            : 1f;
-        FeedEffectPlan plan = BuildFeedEffectPlan(
-            context,
-            dailyFood,
-            levelUpFood,
-            hasLevelUpItems,
-            amount,
-            feedMultiplier);
-
-        if (!plan.HasAnyEffect)
-        {
-            response.Message = "That feed would not change anything right now.";
             return response;
         }
 
@@ -1539,6 +1268,84 @@ internal static class FeedSystem
         }
 
         return response;
+    }
+
+    private static bool TryBuildManualFeedPlan(
+        GameObject targetObject,
+        FeedRequestMessage request,
+        Player requester,
+        out FeedTargetContext context,
+        out FeedEffectPlan plan,
+        out FeedResponseMessage response)
+    {
+        context = default;
+        plan = new FeedEffectPlan();
+        response = new FeedResponseMessage
+        {
+            TransactionId = request.TransactionId,
+            ItemPrefabName = request.ItemPrefabName,
+            TargetId = request.TargetId,
+            Message = string.Empty
+        };
+
+        if (!TryBuildContext(targetObject, out context))
+        {
+            response.Message = FeedLocalization.Text("$flg_feed_target_not_configured");
+            return false;
+        }
+
+        response.TargetId = context.NView.GetZDO().m_uid;
+        response.DisplayPosition = context.Character.GetTopPoint();
+
+        if ((object?)context.BaseAI != null && context.BaseAI.IsAlerted())
+        {
+            response.Message = FeedLocalization.Format("$flg_feed_target_alerted", context.Character.GetHoverName());
+            return false;
+        }
+
+        int requestQuality = Mathf.Max(1, request.ItemQuality);
+        if (!TryGetFeedEntriesForItem(context, request.ItemPrefabName, requestQuality, out ResolvedFoodEntry? dailyFood, out ResolvedFoodEntry? levelUpFood, out bool hasLevelUpItems))
+        {
+            response.Message = FeedLocalization.Text("$flg_feed_invalid_item");
+            return false;
+        }
+
+        int amount = Mathf.Min(request.RequestedAmount, FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
+        if (amount <= 0)
+        {
+            response.Message = FeedLocalization.Text("$flg_feed_no_items_consumed");
+            return false;
+        }
+
+        long nowTicks = ZNet.instance.GetTime().Ticks;
+        long cooldownUntilTicks = context.NView.GetZDO().GetLong(FeedCooldownHash, 0L);
+        if (cooldownUntilTicks > nowTicks)
+        {
+            TimeSpan remaining = new(cooldownUntilTicks - nowTicks);
+            response.Message = FeedLocalization.Format("$flg_feed_cooldown", remaining.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture));
+            return false;
+        }
+
+        bool requesterHasTamingBoost = requester.GetSEMan()
+            .HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost);
+        float feedMultiplier = requesterHasTamingBoost
+            ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier()
+            : 1f;
+        plan = BuildFeedEffectPlan(
+            context,
+            dailyFood,
+            levelUpFood,
+            hasLevelUpItems,
+            amount,
+            feedMultiplier);
+
+        if (plan.HasAnyEffect)
+        {
+            return true;
+        }
+
+        response.Message = FeedLocalization.Text("$flg_feed_no_effect");
+        return false;
     }
 
     private static void TriggerConsumeAnimation(FeedTargetContext context)
@@ -1691,92 +1498,6 @@ internal static class FeedSystem
 
         context.Character.Heal(healAmount, showText: false);
         return healAmount / maxHealth * 100f;
-    }
-
-    private static void ReceiveFeedResponse(Player player, long sender, ZPackage pkg)
-    {
-        if (!FeedResponseMessage.TryRead(pkg, out FeedResponseMessage? response) || response == null)
-        {
-            FeedLikeGrandmaPlugin.Log.LogDebug($"Ignored malformed feed response from peer {sender}.");
-            return;
-        }
-
-        if (!PendingRequests.TryGetValue(response.RequestId, out PendingFeedRequest? pending))
-        {
-            return;
-        }
-
-        if (pending.ExpectedResponderId != 0L && pending.ExpectedResponderId != sender)
-        {
-            FeedLikeGrandmaPlugin.Log.LogWarning(
-                $"Ignored feed response {response.RequestId} from unexpected peer {sender}.");
-            return;
-        }
-
-        PendingRequests.Remove(response.RequestId);
-
-        if (!response.Success)
-        {
-            if (!string.IsNullOrWhiteSpace(response.Message))
-            {
-                player.Message(MessageHud.MessageType.Center, response.Message);
-            }
-
-            return;
-        }
-
-        if (!response.TargetId.Equals(pending.TargetId) ||
-            !response.ItemPrefabName.Equals(pending.ItemPrefabName, StringComparison.OrdinalIgnoreCase) ||
-            response.ConsumedAmount <= 0 ||
-            response.ConsumedAmount > pending.RequestedAmount)
-        {
-            FeedLikeGrandmaPlugin.Log.LogWarning(
-                $"Rejected mismatched feed response {response.RequestId}: expected {pending.ItemPrefabName} for {pending.TargetId}, received {response.ItemPrefabName} for {response.TargetId} with amount {response.ConsumedAmount}.");
-            return;
-        }
-
-        int removedAmount = RemoveItemsByPrefab(
-            player.GetInventory(),
-            pending.ItemPrefabName,
-            pending.ItemQuality,
-            response.ConsumedAmount);
-        if (removedAmount != response.ConsumedAmount)
-        {
-            FeedLikeGrandmaPlugin.Log.LogWarning(
-                $"Feed response {response.RequestId} consumed {response.ConsumedAmount} item(s), but only {removedAmount} matching item(s) remained in the local inventory.");
-        }
-
-        Vector3 basePosition = response.DisplayPosition;
-        int line = 0;
-        if (response.TameDelta > 0)
-        {
-            ShowFloatingText(basePosition + Vector3.up * (0.35f * line++), $"+{response.TameDelta}s", DamageText.TextType.Bonus);
-        }
-
-        if (response.GrowthDelta > 0)
-        {
-            ShowFloatingText(basePosition + Vector3.up * (0.35f * line++), $"+{response.GrowthDelta}s", DamageText.TextType.Bonus);
-        }
-
-        if (response.FedDelta > 0f)
-        {
-            ShowFloatingText(basePosition + Vector3.up * (0.35f * line++), FeedLocalization.Format("$flg_floating_fed", FormatDurationClock(response.FedDelta)), DamageText.TextType.Bonus);
-        }
-
-        if (response.StarDelta > 0)
-        {
-            ShowFloatingText(basePosition + Vector3.up * (0.35f * line++), $"+{response.StarDelta}", DamageText.TextType.Bonus);
-        }
-
-        if (response.HealPercent > 0f)
-        {
-            ShowFloatingText(basePosition + Vector3.up * (0.35f * line++), FeedLocalization.Format("$flg_floating_hp", response.HealPercent.ToString("0.#", CultureInfo.InvariantCulture)), DamageText.TextType.Heal);
-        }
-
-        if (!string.IsNullOrWhiteSpace(response.Message))
-        {
-            player.Message(MessageHud.MessageType.Center, response.Message);
-        }
     }
 
     private static void ApplyAutomaticFeedEffects(
@@ -2012,12 +1733,7 @@ internal static class FeedSystem
 
     private static string NormalizePrefabName(string name)
     {
-        int parenthesisIndex = name.IndexOf('(');
-        int spaceIndex = name.IndexOf(' ');
-        int index = parenthesisIndex < 0
-            ? spaceIndex
-            : spaceIndex < 0 ? parenthesisIndex : Mathf.Min(parenthesisIndex, spaceIndex);
-        return index >= 0 ? name.Substring(0, index) : name;
+        return Utils.GetPrefabName(name);
     }
 
     private static bool TryGetItemPrefabName(ItemDrop.ItemData item, out string prefabName)
@@ -2551,61 +2267,6 @@ internal static class FeedSystem
         return (targetPoint - requesterEye).sqrMagnitude <= maxDistance * maxDistance;
     }
 
-    private static void CleanupCompletedFeedRequests(long nowTicks)
-    {
-        if (CompletedFeedRequests.Count == 0)
-        {
-            return;
-        }
-
-        List<(long Sender, int RequestId)>? expiredKeys = null;
-        foreach (KeyValuePair<(long Sender, int RequestId), CompletedFeedRequest> entry in CompletedFeedRequests)
-        {
-            if (nowTicks - entry.Value.CompletedAtTicks <= CompletedRequestRetentionTicks)
-            {
-                continue;
-            }
-
-            expiredKeys ??= new List<(long Sender, int RequestId)>();
-            expiredKeys.Add(entry.Key);
-        }
-
-        if (expiredKeys == null)
-        {
-            return;
-        }
-
-        foreach ((long Sender, int RequestId) key in expiredKeys)
-        {
-            CompletedFeedRequests.Remove(key);
-        }
-    }
-
-    private static void StoreCompletedFeedRequest(
-        (long Sender, int RequestId) key,
-        CompletedFeedRequest completed)
-    {
-        if (CompletedFeedRequests.Count >= MaxCompletedRequestCacheEntries)
-        {
-            (long Sender, int RequestId) oldestKey = default;
-            long oldestTicks = long.MaxValue;
-            foreach (KeyValuePair<(long Sender, int RequestId), CompletedFeedRequest> entry in CompletedFeedRequests)
-            {
-                if (entry.Value.CompletedAtTicks >= oldestTicks)
-                {
-                    continue;
-                }
-
-                oldestKey = entry.Key;
-                oldestTicks = entry.Value.CompletedAtTicks;
-            }
-
-            CompletedFeedRequests.Remove(oldestKey);
-        }
-
-        CompletedFeedRequests[key] = completed;
-    }
-
     private static int CountItemsByPrefab(Inventory inventory, string prefabName, int itemQuality)
     {
         int count = 0;
@@ -2620,85 +2281,12 @@ internal static class FeedSystem
         return count;
     }
 
-    private static int CountPendingItems(string prefabName, int itemQuality)
-    {
-        int count = 0;
-        foreach (PendingFeedRequest pending in PendingRequests.Values)
-        {
-            if (pending.ItemQuality == itemQuality &&
-                pending.ItemPrefabName.Equals(prefabName, StringComparison.OrdinalIgnoreCase))
-            {
-                count += pending.RequestedAmount;
-            }
-        }
-
-        return count;
-    }
-
-    private static int RemoveItemsByPrefab(Inventory inventory, string prefabName, int itemQuality, int amount)
-    {
-        if (amount <= 0)
-        {
-            return 0;
-        }
-
-        int removedAmount = 0;
-        foreach (ItemDrop.ItemData item in inventory.GetAllItems().ToList())
-        {
-            if (!ItemMatches(item, prefabName, itemQuality))
-            {
-                continue;
-            }
-
-            int remove = Mathf.Min(amount, item.m_stack);
-            inventory.RemoveItem(item, remove);
-            amount -= remove;
-            removedAmount += remove;
-            if (amount <= 0)
-            {
-                break;
-            }
-        }
-
-        return removedAmount;
-    }
-
     private static bool ItemMatches(ItemDrop.ItemData item, string prefabName, int itemQuality)
     {
         return (object?)item != null &&
                Mathf.Max(1, item.m_quality) == Mathf.Max(1, itemQuality) &&
                TryGetItemPrefabName(item, out string itemPrefabName) &&
                itemPrefabName.Equals(prefabName, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private sealed class PendingFeedRequest
-    {
-        public string ItemPrefabName { get; init; } = string.Empty;
-        public int ItemQuality { get; init; } = 1;
-        public ZDOID TargetId { get; init; }
-        public long ExpectedResponderId { get; init; }
-        public int RequestedAmount { get; init; }
-        public long CreatedAtTicks { get; init; }
-    }
-
-    private sealed class CompletedFeedRequest
-    {
-        public ZDOID RequesterId { get; init; }
-        public ZDOID TargetId { get; init; }
-        public string ItemPrefabName { get; init; } = string.Empty;
-        public int ItemQuality { get; init; }
-        public int RequestedAmount { get; init; }
-        public long CompletedAtTicks { get; init; }
-        public FeedResponseMessage Response { get; init; } = null!;
-
-        public bool Matches(FeedRequestMessage request, ZDOID targetId)
-        {
-            return RequesterId.Equals(request.RequesterId) &&
-                   TargetId.Equals(targetId) &&
-                   ItemQuality == request.ItemQuality &&
-                   RequestedAmount == request.RequestedAmount &&
-                   ItemPrefabName.Equals(request.ItemPrefabName, StringComparison.OrdinalIgnoreCase);
-        }
     }
 
     private sealed class FeedEffectPlan
@@ -2745,106 +2333,4 @@ internal static class FeedSystem
         public ResolvedFeedingRule Rule { get; }
     }
 
-    private sealed class FeedRequestMessage
-    {
-        public int RequestId { get; init; }
-        public ZDOID RequesterId { get; init; }
-        public string ItemPrefabName { get; init; } = string.Empty;
-        public int ItemQuality { get; init; } = 1;
-        public int RequestedAmount { get; init; }
-
-        public ZPackage Write()
-        {
-            ZPackage pkg = new();
-            pkg.Write(RequestId);
-            pkg.Write(RequesterId);
-            pkg.Write(ItemPrefabName);
-            pkg.Write(ItemQuality);
-            pkg.Write(RequestedAmount);
-            return pkg;
-        }
-
-        public static bool TryRead(ZPackage pkg, out FeedRequestMessage? message)
-        {
-            message = null;
-            try
-            {
-                message = new FeedRequestMessage
-                {
-                    RequestId = pkg.ReadInt(),
-                    RequesterId = pkg.ReadZDOID(),
-                    ItemPrefabName = pkg.ReadString(),
-                    ItemQuality = pkg.ReadInt(),
-                    RequestedAmount = pkg.ReadInt()
-                };
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-    }
-
-    private sealed class FeedResponseMessage
-    {
-        public int RequestId { get; init; }
-        public bool Success { get; set; }
-        public int ConsumedAmount { get; set; }
-        public string ItemPrefabName { get; init; } = string.Empty;
-        public int TameDelta { get; set; }
-        public int GrowthDelta { get; set; }
-        public int StarDelta { get; set; }
-        public float FedDelta { get; set; }
-        public float HealPercent { get; set; }
-        public ZDOID TargetId { get; set; }
-        public Vector3 DisplayPosition { get; set; }
-        public string Message { get; set; } = string.Empty;
-
-        public ZPackage Write()
-        {
-            ZPackage pkg = new();
-            pkg.Write(RequestId);
-            pkg.Write(Success);
-            pkg.Write(ConsumedAmount);
-            pkg.Write(ItemPrefabName);
-            pkg.Write(TameDelta);
-            pkg.Write(GrowthDelta);
-            pkg.Write(StarDelta);
-            pkg.Write(FedDelta);
-            pkg.Write(HealPercent);
-            pkg.Write(TargetId);
-            pkg.Write(DisplayPosition);
-            pkg.Write(Message);
-            return pkg;
-        }
-
-        public static bool TryRead(ZPackage pkg, out FeedResponseMessage? message)
-        {
-            message = null;
-            try
-            {
-                message = new FeedResponseMessage
-                {
-                    RequestId = pkg.ReadInt(),
-                    Success = pkg.ReadBool(),
-                    ConsumedAmount = pkg.ReadInt(),
-                    ItemPrefabName = pkg.ReadString(),
-                    TameDelta = pkg.ReadInt(),
-                    GrowthDelta = pkg.ReadInt(),
-                    StarDelta = pkg.ReadInt(),
-                    FedDelta = pkg.ReadSingle(),
-                    HealPercent = pkg.ReadSingle(),
-                    TargetId = pkg.ReadZDOID(),
-                    DisplayPosition = pkg.ReadVector3(),
-                    Message = pkg.ReadString()
-                };
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-    }
 }

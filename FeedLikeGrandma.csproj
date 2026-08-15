@@ -136,6 +136,7 @@
         <Compile Include="FeedPatches.cs"/>
         <Compile Include="FeedProcreationSystem.cs"/>
         <Compile Include="FeedLocalization.cs"/>
+        <Compile Include="FeedManualTransactionSystem.cs"/>
         <Compile Include="FeedReferenceSections.cs"/>
         <Compile Include="FeedReferenceWriter.cs"/>
         <Compile Include="FeedRidingSystem.cs"/>
@@ -143,6 +144,8 @@
         <Compile Include="IsExternalInit.cs"/>
         <Compile Include="LocalizationManager.cs"/>
         <Compile Include="Plugin.cs"/>
+        <Compile Include="TamingOrbIconSystem.cs"/>
+        <Compile Include="TamingOrbNetworkSystem.cs"/>
         <Compile Include="TamingOrbSystem.cs"/>
         <Compile Include="Properties\AssemblyInfo.cs"/>
     </ItemGroup>

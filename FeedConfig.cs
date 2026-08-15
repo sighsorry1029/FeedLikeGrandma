@@ -110,8 +110,31 @@ internal sealed class ResolvedMountStaminaValues
 
 internal static class FeedingYamlParser
 {
-    public static RawFeedConfig Parse(string yamlText, List<string> warnings)
+    private sealed class Diagnostics
     {
+        private readonly List<string> _warnings;
+        private readonly List<string> _errors;
+
+        internal Diagnostics(List<string> warnings, List<string> errors)
+        {
+            _warnings = warnings;
+            _errors = errors;
+        }
+
+        internal void Warning(string message)
+        {
+            _warnings.Add(message);
+        }
+
+        internal void Error(string message)
+        {
+            _errors.Add(message);
+        }
+    }
+
+    public static RawFeedConfig Parse(string yamlText, List<string> warnings, List<string> errors)
+    {
+        Diagnostics diagnostics = new(warnings, errors);
         RawFeedConfig config = new();
         if (string.IsNullOrWhiteSpace(yamlText))
         {
@@ -122,7 +145,7 @@ internal static class FeedingYamlParser
         stream.Load(new StringReader(yamlText));
         if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root)
         {
-            warnings.Add("YAML root must be a mapping of defaults, foodNumbers, and prefab names.");
+            diagnostics.Error("YAML root must be a mapping of defaults, foodNumbers, and prefab names.");
             return config;
         }
 
@@ -131,26 +154,26 @@ internal static class FeedingYamlParser
             string key = ReadScalar(entry.Key).Trim();
             if (key.Length == 0)
             {
-                warnings.Add($"{Location(entry.Key)}: top-level key cannot be empty.");
+                diagnostics.Error($"{Location(entry.Key)}: top-level key cannot be empty.");
                 continue;
             }
 
             if (key.Equals("defaults", StringComparison.OrdinalIgnoreCase))
             {
-                ParseDefaults(config, entry.Value, warnings);
+                ParseDefaults(config, entry.Value, diagnostics);
                 continue;
             }
 
             if (key.Equals("foodNumbers", StringComparison.OrdinalIgnoreCase))
             {
-                ParseFoodNumbers(config.FoodNumbers, entry.Value, "foodNumbers", warnings);
+                ParseFoodNumbers(config.FoodNumbers, entry.Value, "foodNumbers", diagnostics);
                 continue;
             }
 
-            RawFeedingRule rule = ParseRule(key, entry.Value, warnings);
+            RawFeedingRule rule = ParseRule(key, entry.Value, diagnostics);
             if (config.Rules.ContainsKey(key))
             {
-                warnings.Add($"{Location(entry.Key)}: prefab '{key}' was defined more than once. The last definition won.");
+                diagnostics.Warning($"{Location(entry.Key)}: prefab '{key}' was defined more than once. The last definition won.");
             }
 
             config.Rules[key] = rule;
@@ -159,11 +182,11 @@ internal static class FeedingYamlParser
         return config;
     }
 
-    private static void ParseDefaults(RawFeedConfig config, YamlNode node, List<string> warnings)
+    private static void ParseDefaults(RawFeedConfig config, YamlNode node, Diagnostics diagnostics)
     {
         if (node is not YamlMappingNode mapping)
         {
-            warnings.Add($"{Location(node)}: defaults must be a mapping.");
+            diagnostics.Error($"{Location(node)}: defaults must be a mapping.");
             return;
         }
 
@@ -172,21 +195,21 @@ internal static class FeedingYamlParser
             string field = ReadScalar(entry.Key).Trim();
             if (field.Equals("feed", StringComparison.OrdinalIgnoreCase))
             {
-                config.Defaults = ParseFeedValues(entry.Value, "defaults.feed", warnings);
+                config.Defaults = ParseFeedValues(entry.Value, "defaults.feed", diagnostics);
             }
             else
             {
-                warnings.Add($"{Location(entry.Key)}: unknown defaults field '{field}'.");
+                diagnostics.Error($"{Location(entry.Key)}: unknown defaults field '{field}'.");
             }
         }
     }
 
-    private static RawFeedingRule ParseRule(string prefabName, YamlNode node, List<string> warnings)
+    private static RawFeedingRule ParseRule(string prefabName, YamlNode node, Diagnostics diagnostics)
     {
         RawFeedingRule rule = new() { PrefabName = prefabName };
         if (node is not YamlMappingNode mapping)
         {
-            warnings.Add($"{Location(node)}: prefab '{prefabName}' must contain a mapping.");
+            diagnostics.Error($"{Location(node)}: prefab '{prefabName}' must contain a mapping.");
             return rule;
         }
 
@@ -197,29 +220,29 @@ internal static class FeedingYamlParser
             switch (normalized)
             {
                 case "feed":
-                    rule.Feed = ParseFeedValues(entry.Value, $"{prefabName}.feed", warnings);
+                    rule.Feed = ParseFeedValues(entry.Value, $"{prefabName}.feed", diagnostics);
                     break;
                 case "consumeitems":
                     rule.HasConsumeItemsOverride = true;
-                    ParseConsumeItems(rule, entry.Value, warnings);
+                    ParseConsumeItems(rule, entry.Value, diagnostics);
                     break;
                 case "levelupitems":
-                    ParseLevelUpItems(rule, entry.Value, $"{prefabName}.levelUpItems", warnings);
+                    ParseLevelUpItems(rule, entry.Value, $"{prefabName}.levelUpItems", diagnostics);
                     break;
                 case "tame":
-                    rule.Tame = ParseTameValues(entry.Value, $"{prefabName}.tame", warnings);
+                    rule.Tame = ParseTameValues(entry.Value, $"{prefabName}.tame", diagnostics);
                     break;
                 case "procreation":
-                    rule.Procreation = ParseProcreationValues(entry.Value, $"{prefabName}.procreation", warnings);
+                    rule.Procreation = ParseProcreationValues(entry.Value, $"{prefabName}.procreation", diagnostics);
                     break;
                 case "grow":
-                    rule.Grow = ParseGrowValues(entry.Value, $"{prefabName}.grow", warnings);
+                    rule.Grow = ParseGrowValues(entry.Value, $"{prefabName}.grow", diagnostics);
                     break;
                 case "egggrow":
-                    rule.EggGrow = ParseEggGrowValues(entry.Value, $"{prefabName}.eggGrow", warnings);
+                    rule.EggGrow = ParseEggGrowValues(entry.Value, $"{prefabName}.eggGrow", diagnostics);
                     break;
                 case "mountstamina":
-                    rule.MountStamina = ParseMountStaminaValues(entry.Value, $"{prefabName}.mountStamina", warnings);
+                    rule.MountStamina = ParseMountStaminaValues(entry.Value, $"{prefabName}.mountStamina", diagnostics);
                     break;
                 case "restrictedbiome":
                 case "restrictedbiomes":
@@ -231,7 +254,7 @@ internal static class FeedingYamlParser
                         .Distinct(StringComparer.OrdinalIgnoreCase));
                     break;
                 default:
-                    warnings.Add($"{Location(entry.Key)}: unknown field '{field}' for prefab '{prefabName}'.");
+                    diagnostics.Error($"{Location(entry.Key)}: unknown field '{field}' for prefab '{prefabName}'.");
                     break;
             }
         }
@@ -239,22 +262,22 @@ internal static class FeedingYamlParser
         return rule;
     }
 
-    private static void ParseConsumeItems(RawFeedingRule rule, YamlNode node, List<string> warnings)
+    private static void ParseConsumeItems(RawFeedingRule rule, YamlNode node, Diagnostics diagnostics)
     {
-        ParseFoodEntries(rule.Foods, rule.PrefabName, node, warnings);
+        ParseFoodEntries(rule.Foods, rule.PrefabName, node, diagnostics);
     }
 
     private static void ParseFoodEntries(
         List<RawFoodEntry> foods,
         string context,
         YamlNode node,
-        List<string> warnings)
+        Diagnostics diagnostics)
     {
         if (node is YamlSequenceNode sequence)
         {
             foreach (YamlNode itemNode in sequence.Children)
             {
-                AddFoodEntry(foods, context, itemNode, warnings);
+                AddFoodEntry(foods, context, itemNode, diagnostics);
             }
 
             return;
@@ -262,7 +285,7 @@ internal static class FeedingYamlParser
 
         foreach (string item in ParseStringList(node))
         {
-            AddFoodEntry(foods, context, item, node, warnings);
+            AddFoodEntry(foods, context, item, node, diagnostics);
         }
     }
 
@@ -270,7 +293,7 @@ internal static class FeedingYamlParser
         List<RawFoodEntry> foods,
         string context,
         YamlNode node,
-        List<string> warnings)
+        Diagnostics diagnostics)
     {
         if (node is YamlMappingNode mapping && mapping.Children.Count == 1)
         {
@@ -281,7 +304,7 @@ internal static class FeedingYamlParser
                 ReadScalar(pair.Key).Trim(),
                 ReadScalar(pair.Value).Trim(),
                 node,
-                warnings);
+                diagnostics);
             return;
         }
 
@@ -290,12 +313,12 @@ internal static class FeedingYamlParser
             List<string> parts = sequence.Children.Select(child => ReadScalar(child).Trim()).ToList();
             if (parts.Count >= 2)
             {
-                AddFoodEntry(foods, context, parts[0], parts[1], node, warnings);
+                AddFoodEntry(foods, context, parts[0], parts[1], node, diagnostics);
                 return;
             }
         }
 
-        AddFoodEntry(foods, context, ReadScalar(node).Trim(), node, warnings);
+        AddFoodEntry(foods, context, ReadScalar(node).Trim(), node, diagnostics);
     }
 
     private static void AddFoodEntry(
@@ -303,7 +326,7 @@ internal static class FeedingYamlParser
         string context,
         string entryText,
         YamlNode node,
-        List<string> warnings)
+        Diagnostics diagnostics)
     {
         string foodName;
         string? valueText = null;
@@ -317,18 +340,18 @@ internal static class FeedingYamlParser
             foodName = Unquote(entryText).Trim();
         }
 
-        AddFoodEntry(foods, context, foodName, valueText, node, warnings);
+        AddFoodEntry(foods, context, foodName, valueText, node, diagnostics);
     }
 
-    private static void AddFoodEntry(List<RawFoodEntry> foods, string ruleName, string foodName, string? valueText, YamlNode node, List<string> warnings)
+    private static void AddFoodEntry(List<RawFoodEntry> foods, string ruleName, string foodName, string? valueText, YamlNode node, Diagnostics diagnostics)
     {
         if (string.IsNullOrWhiteSpace(foodName))
         {
-            warnings.Add($"{Location(node)}: food item name cannot be empty.");
+            diagnostics.Error($"{Location(node)}: food item name cannot be empty.");
             return;
         }
 
-        if (!TryParseFoodToken(foodName, node, warnings, out string prefabName, out int? requiredQuality))
+        if (!TryParseFoodToken(foodName, node, diagnostics, out string prefabName, out int? requiredQuality))
         {
             return;
         }
@@ -336,7 +359,7 @@ internal static class FeedingYamlParser
         float? value = null;
         if (!string.IsNullOrWhiteSpace(valueText))
         {
-            value = Math.Max(0f, ParseFloat(valueText!, $"{ruleName}.{FormatFoodKey(prefabName, requiredQuality)}", node, warnings));
+            value = Math.Max(0f, ParseFloat(valueText!, $"{ruleName}.{FormatFoodKey(prefabName, requiredQuality)}", node, diagnostics));
         }
 
         int existingIndex = foods.FindIndex(entry =>
@@ -344,7 +367,7 @@ internal static class FeedingYamlParser
             entry.RequiredQuality == requiredQuality);
         if (existingIndex >= 0)
         {
-            warnings.Add($"{Location(node)}: food '{FormatFoodKey(prefabName, requiredQuality)}' was defined more than once for '{ruleName}'. The last value won.");
+            diagnostics.Warning($"{Location(node)}: food '{FormatFoodKey(prefabName, requiredQuality)}' was defined more than once for '{ruleName}'. The last value won.");
             foods.RemoveAt(existingIndex);
         }
 
@@ -356,58 +379,58 @@ internal static class FeedingYamlParser
         });
     }
 
-    private static void ParseLevelUpItems(RawFeedingRule rule, YamlNode node, string context, List<string> warnings)
+    private static void ParseLevelUpItems(RawFeedingRule rule, YamlNode node, string context, Diagnostics diagnostics)
     {
         if (node is not YamlMappingNode mapping)
         {
-            warnings.Add($"{Location(node)}: {context} must be a mapping of current Character level to consumeItems.");
+            diagnostics.Error($"{Location(node)}: {context} must be a mapping of current Character level to consumeItems.");
             return;
         }
 
         foreach (KeyValuePair<YamlNode, YamlNode> entry in mapping.Children)
         {
-            int currentLevel = Math.Max(1, ParseInt(entry.Key, $"{context}.level", warnings));
+            int currentLevel = Math.Max(1, ParseInt(entry.Key, $"{context}.level", diagnostics));
             List<RawFoodEntry> foods = new();
-            ParseFoodEntries(foods, $"{rule.PrefabName}.levelUpItems.{currentLevel}", entry.Value, warnings);
+            ParseFoodEntries(foods, $"{rule.PrefabName}.levelUpItems.{currentLevel}", entry.Value, diagnostics);
 
             if (rule.LevelUpItems.ContainsKey(currentLevel))
             {
-                warnings.Add($"{Location(entry.Key)}: levelUpItems for Character level {currentLevel} was defined more than once for prefab '{rule.PrefabName}'. The last definition won.");
+                diagnostics.Warning($"{Location(entry.Key)}: levelUpItems for Character level {currentLevel} was defined more than once for prefab '{rule.PrefabName}'. The last definition won.");
             }
 
             rule.LevelUpItems[currentLevel] = foods;
         }
     }
 
-    private static void ParseFoodNumbers(Dictionary<string, float> foodNumbers, YamlNode node, string context, List<string> warnings)
+    private static void ParseFoodNumbers(Dictionary<string, float> foodNumbers, YamlNode node, string context, Diagnostics diagnostics)
     {
         if (node is YamlSequenceNode sequence)
         {
             foreach (YamlNode itemNode in sequence.Children)
             {
-                AddFoodNumber(foodNumbers, itemNode, context, warnings);
+                AddFoodNumber(foodNumbers, itemNode, context, diagnostics);
             }
 
             return;
         }
 
-        warnings.Add($"{Location(node)}: {context} must be a sequence. Use entries like '- Raspberry' or '- Raspberry, 3'.");
+        diagnostics.Error($"{Location(node)}: {context} must be a sequence. Use entries like '- Raspberry' or '- Raspberry, 3'.");
     }
 
-    private static void AddFoodNumber(Dictionary<string, float> foodNumbers, YamlNode node, string context, List<string> warnings)
+    private static void AddFoodNumber(Dictionary<string, float> foodNumbers, YamlNode node, string context, Diagnostics diagnostics)
     {
         string entryText = ReadScalar(node).Trim();
         bool hasExplicitValue = TrySplitCommaValue(entryText, out string splitName, out string splitValue);
 
         string foodNameFromText = Unquote(hasExplicitValue ? splitName : entryText).Trim();
-        if (!TryParseFoodToken(foodNameFromText, node, warnings, out string prefabName, out int? requiredQuality))
+        if (!TryParseFoodToken(foodNameFromText, node, diagnostics, out string prefabName, out int? requiredQuality))
         {
             return;
         }
 
         string foodKey = FormatFoodKey(prefabName, requiredQuality);
         foodNumbers[foodKey] = hasExplicitValue
-            ? Math.Max(0f, ParseFloat(splitValue, $"{context}.{foodKey}", node, warnings))
+            ? Math.Max(0f, ParseFloat(splitValue, $"{context}.{foodKey}", node, diagnostics))
             : 1f;
     }
 
@@ -418,13 +441,13 @@ internal static class FeedingYamlParser
             : prefabName;
     }
 
-    private static bool TryParseFoodToken(string foodName, YamlNode node, List<string> warnings, out string prefabName, out int? requiredQuality)
+    private static bool TryParseFoodToken(string foodName, YamlNode node, Diagnostics diagnostics, out string prefabName, out int? requiredQuality)
     {
         prefabName = Unquote(foodName).Trim();
         requiredQuality = null;
         if (prefabName.Length == 0)
         {
-            warnings.Add($"{Location(node)}: food item name cannot be empty.");
+            diagnostics.Error($"{Location(node)}: food item name cannot be empty.");
             return false;
         }
 
@@ -440,7 +463,7 @@ internal static class FeedingYamlParser
             !int.TryParse(qualityText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int quality) ||
             quality <= 0)
         {
-            warnings.Add($"{Location(node)}: food item '{foodName}' must use ItemName@quality with a positive integer quality.");
+            diagnostics.Error($"{Location(node)}: food item '{foodName}' must use ItemName@quality with a positive integer quality.");
             prefabName = string.Empty;
             return false;
         }
@@ -450,103 +473,103 @@ internal static class FeedingYamlParser
         return true;
     }
 
-    private static RawFeedValues ParseFeedValues(YamlNode node, string field, List<string> warnings)
+    private static RawFeedValues ParseFeedValues(YamlNode node, string field, Diagnostics diagnostics)
     {
         List<string> parts = ReadTupleParts(node);
         if (parts.Count != 5)
         {
-            warnings.Add($"{Location(node)}: field '{field}' must contain 5 values: levelupconstant, tamingconstant, growthconstant, healconstant, fedconstant.");
+            diagnostics.Error($"{Location(node)}: field '{field}' must contain 5 values: levelupconstant, tamingconstant, growthconstant, healconstant, fedconstant.");
             return new RawFeedValues();
         }
 
         return new RawFeedValues
         {
-            LevelUpConstant = Math.Max(0f, ParseFloat(parts[0], $"{field}.levelupconstant", node, warnings)),
-            TamingConstant = Math.Max(0f, ParseFloat(parts[1], $"{field}.tamingconstant", node, warnings)),
-            GrowthConstant = Math.Max(0f, ParseFloat(parts[2], $"{field}.growthconstant", node, warnings)),
-            HealConstant = Math.Max(0f, ParseFloat(parts[3], $"{field}.healconstant", node, warnings)),
-            FedConstant = Math.Max(0f, ParseFloat(parts[4], $"{field}.fedconstant", node, warnings))
+            LevelUpConstant = Math.Max(0f, ParseFloat(parts[0], $"{field}.levelupconstant", node, diagnostics)),
+            TamingConstant = Math.Max(0f, ParseFloat(parts[1], $"{field}.tamingconstant", node, diagnostics)),
+            GrowthConstant = Math.Max(0f, ParseFloat(parts[2], $"{field}.growthconstant", node, diagnostics)),
+            HealConstant = Math.Max(0f, ParseFloat(parts[3], $"{field}.healconstant", node, diagnostics)),
+            FedConstant = Math.Max(0f, ParseFloat(parts[4], $"{field}.fedconstant", node, diagnostics))
         };
     }
 
-    private static RawTameValues? ParseTameValues(YamlNode node, string field, List<string> warnings)
+    private static RawTameValues? ParseTameValues(YamlNode node, string field, Diagnostics diagnostics)
     {
         List<string> parts = ReadTupleParts(node);
         if (parts.Count != 4)
         {
-            warnings.Add($"{Location(node)}: field '{field}' must contain 4 values: fedDuration, tamingTime, startsTamed, commandable.");
+            diagnostics.Error($"{Location(node)}: field '{field}' must contain 4 values: fedDuration, tamingTime, startsTamed, commandable.");
             return null;
         }
 
         return new RawTameValues
         {
-            FedDuration = Math.Max(0f, ParseFloat(parts[0], $"{field}.fedDuration", node, warnings)),
-            TamingTime = Math.Max(0f, ParseFloat(parts[1], $"{field}.tamingTime", node, warnings)),
-            StartsTamed = ParseBool(parts[2], $"{field}.startsTamed", node, warnings),
-            Commandable = ParseBool(parts[3], $"{field}.commandable", node, warnings)
+            FedDuration = Math.Max(0f, ParseFloat(parts[0], $"{field}.fedDuration", node, diagnostics)),
+            TamingTime = Math.Max(0f, ParseFloat(parts[1], $"{field}.tamingTime", node, diagnostics)),
+            StartsTamed = ParseBool(parts[2], $"{field}.startsTamed", node, diagnostics),
+            Commandable = ParseBool(parts[3], $"{field}.commandable", node, diagnostics)
         };
     }
 
-    private static RawProcreationValues? ParseProcreationValues(YamlNode node, string field, List<string> warnings)
+    private static RawProcreationValues? ParseProcreationValues(YamlNode node, string field, Diagnostics diagnostics)
     {
         List<string> parts = ReadTupleParts(node);
         if (parts.Count != 2)
         {
-            warnings.Add($"{Location(node)}: field '{field}' must contain 2 values: maxCreatures, totalCheckRange.");
+            diagnostics.Error($"{Location(node)}: field '{field}' must contain 2 values: maxCreatures, totalCheckRange.");
             return null;
         }
 
         return new RawProcreationValues
         {
-            MaxCreatures = Math.Max(0, ParseInt(parts[0], $"{field}.maxCreatures", node, warnings)),
-            TotalCheckRange = Math.Max(0f, ParseFloat(parts[1], $"{field}.totalCheckRange", node, warnings))
+            MaxCreatures = Math.Max(0, ParseInt(parts[0], $"{field}.maxCreatures", node, diagnostics)),
+            TotalCheckRange = Math.Max(0f, ParseFloat(parts[1], $"{field}.totalCheckRange", node, diagnostics))
         };
     }
 
-    private static RawGrowValues? ParseGrowValues(YamlNode node, string field, List<string> warnings)
+    private static RawGrowValues? ParseGrowValues(YamlNode node, string field, Diagnostics diagnostics)
     {
         List<string> parts = ReadTupleParts(node);
         if (parts.Count != 1)
         {
-            warnings.Add($"{Location(node)}: field '{field}' must contain 1 value: growTime.");
+            diagnostics.Error($"{Location(node)}: field '{field}' must contain 1 value: growTime.");
             return null;
         }
 
         return new RawGrowValues
         {
-            GrowTime = Math.Max(0f, ParseFloat(parts[0], $"{field}.growTime", node, warnings))
+            GrowTime = Math.Max(0f, ParseFloat(parts[0], $"{field}.growTime", node, diagnostics))
         };
     }
 
-    private static RawEggGrowValues? ParseEggGrowValues(YamlNode node, string field, List<string> warnings)
+    private static RawEggGrowValues? ParseEggGrowValues(YamlNode node, string field, Diagnostics diagnostics)
     {
         List<string> parts = ReadTupleParts(node);
         if (parts.Count != 1)
         {
-            warnings.Add($"{Location(node)}: field '{field}' must contain 1 value: growTime.");
+            diagnostics.Error($"{Location(node)}: field '{field}' must contain 1 value: growTime.");
             return null;
         }
 
         return new RawEggGrowValues
         {
-            GrowTime = Math.Max(0f, ParseFloat(parts[0], $"{field}.growTime", node, warnings))
+            GrowTime = Math.Max(0f, ParseFloat(parts[0], $"{field}.growTime", node, diagnostics))
         };
     }
 
-    private static RawMountStaminaValues? ParseMountStaminaValues(YamlNode node, string field, List<string> warnings)
+    private static RawMountStaminaValues? ParseMountStaminaValues(YamlNode node, string field, Diagnostics diagnostics)
     {
         List<string> parts = ReadTupleParts(node);
         if (parts.Count != 3)
         {
-            warnings.Add($"{Location(node)}: field '{field}' must contain 3 values: attackStaminaCost, jumpStaminaCost, attackCooldown.");
+            diagnostics.Error($"{Location(node)}: field '{field}' must contain 3 values: attackStaminaCost, jumpStaminaCost, attackCooldown.");
             return null;
         }
 
         return new RawMountStaminaValues
         {
-            AttackStaminaCost = Math.Max(0f, ParseFloat(parts[0], $"{field}.attackStaminaCost", node, warnings)),
-            JumpStaminaCost = Math.Max(0f, ParseFloat(parts[1], $"{field}.jumpStaminaCost", node, warnings)),
-            AttackCooldown = Math.Max(0f, ParseFloat(parts[2], $"{field}.attackCooldown", node, warnings))
+            AttackStaminaCost = Math.Max(0f, ParseFloat(parts[0], $"{field}.attackStaminaCost", node, diagnostics)),
+            JumpStaminaCost = Math.Max(0f, ParseFloat(parts[1], $"{field}.jumpStaminaCost", node, diagnostics)),
+            AttackCooldown = Math.Max(0f, ParseFloat(parts[2], $"{field}.attackCooldown", node, diagnostics))
         };
     }
 
@@ -590,12 +613,12 @@ internal static class FeedingYamlParser
         return SplitCommaText(normalized).Select(part => Unquote(part).Trim()).ToList();
     }
 
-    private static int ParseInt(YamlNode node, string field, List<string> warnings)
+    private static int ParseInt(YamlNode node, string field, Diagnostics diagnostics)
     {
-        return ParseInt(ReadScalar(node), field, node, warnings);
+        return ParseInt(ReadScalar(node), field, node, diagnostics);
     }
 
-    private static int ParseInt(string valueText, string field, YamlNode node, List<string> warnings)
+    private static int ParseInt(string valueText, string field, YamlNode node, Diagnostics diagnostics)
     {
         string normalized = Unquote(valueText).Trim();
         if (int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
@@ -603,16 +626,16 @@ internal static class FeedingYamlParser
             return value;
         }
 
-        warnings.Add($"{Location(node)}: field '{field}' must be an integer.");
+        diagnostics.Error($"{Location(node)}: field '{field}' must be an integer.");
         return 0;
     }
 
-    private static float ParseFloat(YamlNode node, string field, List<string> warnings)
+    private static float ParseFloat(YamlNode node, string field, Diagnostics diagnostics)
     {
-        return ParseFloat(ReadScalar(node), field, node, warnings);
+        return ParseFloat(ReadScalar(node), field, node, diagnostics);
     }
 
-    private static float ParseFloat(string valueText, string field, YamlNode node, List<string> warnings)
+    private static float ParseFloat(string valueText, string field, YamlNode node, Diagnostics diagnostics)
     {
         string normalized = Unquote(valueText).Trim();
         if (float.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
@@ -620,11 +643,11 @@ internal static class FeedingYamlParser
             return value;
         }
 
-        warnings.Add($"{Location(node)}: field '{field}' must be a number.");
+        diagnostics.Error($"{Location(node)}: field '{field}' must be a number.");
         return 0f;
     }
 
-    private static bool ParseBool(string valueText, string field, YamlNode node, List<string> warnings)
+    private static bool ParseBool(string valueText, string field, YamlNode node, Diagnostics diagnostics)
     {
         string normalized = Unquote(valueText).Trim();
         if (bool.TryParse(normalized, out bool value))
@@ -645,7 +668,7 @@ internal static class FeedingYamlParser
             case "off":
                 return false;
             default:
-                warnings.Add($"{Location(node)}: field '{field}' must be true or false.");
+                diagnostics.Error($"{Location(node)}: field '{field}' must be true or false.");
                 return false;
         }
     }
