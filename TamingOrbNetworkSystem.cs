@@ -113,7 +113,6 @@ internal static partial class TamingOrbSystem
             StartedRealtime = Time.realtimeSinceStartup,
             LastSentRealtime = Time.realtimeSinceStartup
         };
-        CaptureItemState(transaction);
         ClientCaptureTransactions[request.TransactionId] = transaction;
         routedRpc.InvokeRoutedRPC(serverPeerId, CaptureRequestServerRpc, request.Write());
         FeedLikeGrandmaPlugin.Instance.StartCoroutine(CompleteCaptureDelay(request.TransactionId, delay));
@@ -398,7 +397,7 @@ internal static partial class TamingOrbSystem
 
         Player? player = Player.m_localPlayer;
         if ((object?)player == null || !player.GetInventory().ContainsItem(transaction.Item) ||
-            TryReadPayload(transaction.Item, out _, logWarnings: false))
+            transaction.Item.m_customData.ContainsKey(PayloadKey))
         {
             FinishCaptureClientFailure(transaction, FeedLocalization.Text("$flg_taming_orb_data_changed"));
             return;
@@ -417,6 +416,8 @@ internal static partial class TamingOrbSystem
         try
         {
             _ = GetIconVariantForPayload(transaction.Item, payload);
+            CaptureItemState(transaction);
+            transaction.ItemStateStaged = true;
             transaction.Item.m_stack = 1;
             transaction.Item.m_customData[PayloadKey] = transaction.Prepared.Payload;
             SetOrRemoveCustomData(
@@ -702,23 +703,14 @@ internal static partial class TamingOrbSystem
             }
 
             transaction.LastSentRealtime = Time.realtimeSinceStartup;
-            if (transaction.SpawnAttempted)
+            bool resendResult = transaction.SpawnAttempted;
+            ZRoutedRpc.instance.InvokeRoutedRPC(
+                ZRoutedRpc.instance.GetServerPeerID(),
+                ReleaseRequestServerRpc,
+                transaction.Request.Write());
+            if (resendResult && ClientReleaseTransactions.ContainsKey(transactionId) && transaction.Result != null)
             {
-                ZRoutedRpc.instance.InvokeRoutedRPC(
-                    ZRoutedRpc.instance.GetServerPeerID(),
-                    ReleaseRequestServerRpc,
-                    transaction.Request.Write());
-                if (ClientReleaseTransactions.ContainsKey(transactionId) && transaction.Result != null)
-                {
-                    SendReleaseResultToServer(transaction.Result);
-                }
-            }
-            else
-            {
-                ZRoutedRpc.instance.InvokeRoutedRPC(
-                    ZRoutedRpc.instance.GetServerPeerID(),
-                    ReleaseRequestServerRpc,
-                    transaction.Request.Write());
+                SendReleaseResultToServer(transaction.Result);
             }
         }
     }
@@ -731,12 +723,6 @@ internal static partial class TamingOrbSystem
             !IsValidReleaseRequest(request) ||
             !AuthenticateOrbPlayer(sender, request.RequesterId))
         {
-            return;
-        }
-
-        if (!IsEnabled())
-        {
-            SendReleaseApprovalToPeer(sender, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_disabled")));
             return;
         }
 
@@ -758,6 +744,12 @@ internal static partial class TamingOrbSystem
                 SendReleaseApprovalToClient(existing);
             }
 
+            return;
+        }
+
+        if (!IsEnabled())
+        {
+            SendReleaseApprovalToPeer(sender, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_disabled")));
             return;
         }
 
@@ -806,6 +798,12 @@ internal static partial class TamingOrbSystem
 
         if (!approval.Success)
         {
+            if (transaction.SpawnAttempted)
+            {
+                // Once spawning has been attempted, only a final result can resolve the transaction.
+                return;
+            }
+
             FinishReleaseClient(transaction, success: false, approval.Message);
             return;
         }
@@ -981,7 +979,7 @@ internal static partial class TamingOrbSystem
         Player? player = Player.m_localPlayer;
         if ((object?)player != null)
         {
-            if (player.GetInventory().ContainsItem(transaction.Item))
+            if (transaction.ItemStateStaged && player.GetInventory().ContainsItem(transaction.Item))
             {
                 RestoreCaptureItemState(transaction, player.GetInventory());
             }
@@ -1424,6 +1422,7 @@ internal static partial class TamingOrbSystem
         public OrbCapturePrepared? Prepared { get; set; }
         public OrbCaptureClientPhase Phase { get; set; }
         public bool DelayElapsed { get; set; }
+        public bool ItemStateStaged { get; set; }
         public float StartedRealtime { get; init; }
         public float LastSentRealtime { get; set; }
         public int PreviousStack { get; set; }

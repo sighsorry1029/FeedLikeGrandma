@@ -640,6 +640,12 @@ internal static class FeedingYamlParser
         string normalized = Unquote(valueText).Trim();
         if (float.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out float value))
         {
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                diagnostics.Error($"{Location(node)}: field '{field}' must be a finite number.");
+                return 0f;
+            }
+
             return value;
         }
 

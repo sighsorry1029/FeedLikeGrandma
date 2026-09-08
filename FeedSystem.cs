@@ -219,15 +219,11 @@ internal static partial class FeedSystem
         }
 
         List<RawFoodEntry> effectiveFoods = GetEffectiveFoodEntries(prefab, rawRule);
-        HashSet<string> validFoodNames = CollectValidFoodNames(prefab, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-        validFoodNames.UnionWith(effectiveFoods.Select(food => food.PrefabName));
         RawFeedValues feedValues = rawRule.Feed ?? FeedDefaults;
         List<ResolvedFoodEntry> resolvedFoods = ResolveFoodEntries(
             prefabName,
             effectiveFoods,
-            validFoodNames,
-            explicitRule,
-            validateNativeFood: true);
+            explicitRule);
         Dictionary<int, List<ResolvedFoodEntry>> levelUpItems = ResolveLevelUpItems(prefabName, rawRule, explicitRule);
         ResolvedMountStaminaValues? mountStamina = ResolveMountStamina(rawRule.MountStamina);
         List<string> restrictedBiomes = ResolveRestrictedBiomes(rawRule);
@@ -291,9 +287,7 @@ internal static partial class FeedSystem
             List<ResolvedFoodEntry> foods = ResolveFoodEntries(
                 prefabName,
                 entry.Value,
-                validFoodNames: null,
-                explicitRule,
-                validateNativeFood: false);
+                explicitRule);
             resolved[Math.Max(1, entry.Key)] = foods;
         }
 
@@ -303,26 +297,13 @@ internal static partial class FeedSystem
     private static List<ResolvedFoodEntry> ResolveFoodEntries(
         string prefabName,
         IEnumerable<RawFoodEntry> rawFoods,
-        HashSet<string>? validFoodNames,
-        bool explicitRule,
-        bool validateNativeFood)
+        bool explicitRule)
     {
         List<ResolvedFoodEntry> resolvedFoods = new();
         foreach (RawFoodEntry rawFood in rawFoods)
         {
             string foodKey = FeedingYamlParser.FormatFoodKey(rawFood.PrefabName, rawFood.RequiredQuality);
             float foodValue = ResolveFoodValue(rawFood);
-
-            if (validateNativeFood && validFoodNames != null && !validFoodNames.Contains(rawFood.PrefabName))
-            {
-                if (explicitRule)
-                {
-                    FeedLikeGrandmaPlugin.Log.LogWarning(
-                        $"Ignoring food '{foodKey}' for prefab '{prefabName}' because it is not valid native food for that creature chain.");
-                }
-
-                continue;
-            }
 
             GameObject? itemPrefab = ObjectDB.instance.GetItemPrefab(rawFood.PrefabName);
             if ((object?)itemPrefab == null)
@@ -768,7 +749,7 @@ internal static partial class FeedSystem
             return false;
         }
 
-        return TryStartFeedRequest(player, ((Component)tameable).gameObject, item);
+        return TryStartManualFeedTransaction(player, ((Component)tameable).gameObject, item);
     }
 
     internal static bool TryHandleGrowupUseItem(Humanoid user, GameObject? hoverObject, ItemDrop.ItemData item)
@@ -784,7 +765,7 @@ internal static partial class FeedSystem
             return false;
         }
 
-        return TryStartFeedRequest(player, ((Component)character).gameObject, item);
+        return TryStartManualFeedTransaction(player, ((Component)character).gameObject, item);
     }
 
     internal static string AugmentHoverText(Character character, string originalText)
@@ -1216,138 +1197,6 @@ internal static partial class FeedSystem
         return false;
     }
 
-    private static bool TryStartFeedRequest(Player player, GameObject targetObject, ItemDrop.ItemData item)
-    {
-        return TryStartManualFeedTransaction(player, targetObject, item);
-    }
-
-    private static FeedResponseMessage ProcessFeedRequest(
-        GameObject targetObject,
-        FeedRequestMessage request,
-        Player requester)
-    {
-        if (!TryBuildManualFeedPlan(
-                targetObject,
-                request,
-                requester,
-                out FeedTargetContext context,
-                out FeedEffectPlan plan,
-                out FeedResponseMessage response))
-        {
-            return response;
-        }
-
-        response.Success = true;
-        response.ConsumedAmount = plan.Amount;
-        TriggerConsumeAnimation(context);
-
-        if ((object?)context.Tameable != null && plan.FedDeltaRequested > 0f)
-        {
-            response.FedDelta = AddFedTime(context, plan.FedDeltaRequested);
-        }
-
-        response.TameDelta = ApplyTameDelta(context, plan.TameDeltaRequested);
-
-        response.GrowthDelta = ApplyGrowthDelta(context, plan.GrowthDeltaRequested, out bool grewThisFeed);
-
-        if (plan.StarDeltaRequested > 0)
-        {
-            response.StarDelta = ApplyStarProgress(context, plan.StarDeltaRequested);
-        }
-
-        if (!grewThisFeed)
-        {
-            response.HealPercent = ApplyHealPercent(context, plan.HealPercentRequested);
-        }
-
-        if (!grewThisFeed)
-        {
-            long cooldownTicksToSet = ZNet.instance.GetTime().AddSeconds(FeedLikeGrandmaPlugin.FeedCooldownSeconds.Value).Ticks;
-            context.NView.GetZDO().Set(FeedCooldownHash, cooldownTicksToSet);
-            response.DisplayPosition = context.Character.GetTopPoint();
-        }
-
-        return response;
-    }
-
-    private static bool TryBuildManualFeedPlan(
-        GameObject targetObject,
-        FeedRequestMessage request,
-        Player requester,
-        out FeedTargetContext context,
-        out FeedEffectPlan plan,
-        out FeedResponseMessage response)
-    {
-        context = default;
-        plan = new FeedEffectPlan();
-        response = new FeedResponseMessage
-        {
-            TransactionId = request.TransactionId,
-            ItemPrefabName = request.ItemPrefabName,
-            TargetId = request.TargetId,
-            Message = string.Empty
-        };
-
-        if (!TryBuildContext(targetObject, out context))
-        {
-            response.Message = FeedLocalization.Text("$flg_feed_target_not_configured");
-            return false;
-        }
-
-        response.TargetId = context.NView.GetZDO().m_uid;
-        response.DisplayPosition = context.Character.GetTopPoint();
-
-        if ((object?)context.BaseAI != null && context.BaseAI.IsAlerted())
-        {
-            response.Message = FeedLocalization.Format("$flg_feed_target_alerted", context.Character.GetHoverName());
-            return false;
-        }
-
-        int requestQuality = Mathf.Max(1, request.ItemQuality);
-        if (!TryGetFeedEntriesForItem(context, request.ItemPrefabName, requestQuality, out ResolvedFoodEntry? dailyFood, out ResolvedFoodEntry? levelUpFood, out bool hasLevelUpItems))
-        {
-            response.Message = FeedLocalization.Text("$flg_feed_invalid_item");
-            return false;
-        }
-
-        int amount = Mathf.Min(request.RequestedAmount, FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
-        if (amount <= 0)
-        {
-            response.Message = FeedLocalization.Text("$flg_feed_no_items_consumed");
-            return false;
-        }
-
-        long nowTicks = ZNet.instance.GetTime().Ticks;
-        long cooldownUntilTicks = context.NView.GetZDO().GetLong(FeedCooldownHash, 0L);
-        if (cooldownUntilTicks > nowTicks)
-        {
-            TimeSpan remaining = new(cooldownUntilTicks - nowTicks);
-            response.Message = FeedLocalization.Format("$flg_feed_cooldown", remaining.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture));
-            return false;
-        }
-
-        bool requesterHasTamingBoost = requester.GetSEMan()
-            .HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost);
-        float feedMultiplier = requesterHasTamingBoost
-            ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier()
-            : 1f;
-        plan = BuildFeedEffectPlan(
-            context,
-            dailyFood,
-            levelUpFood,
-            hasLevelUpItems,
-            amount,
-            feedMultiplier);
-
-        if (plan.HasAnyEffect)
-        {
-            return true;
-        }
-
-        response.Message = FeedLocalization.Text("$flg_feed_no_effect");
-        return false;
-    }
-
     private static void TriggerConsumeAnimation(FeedTargetContext context)
     {
         ZSyncAnimation? animator = context.BaseAI?.m_animator;
@@ -1752,37 +1601,6 @@ internal static partial class FeedSystem
         }
 
         return false;
-    }
-
-    private static HashSet<string> CollectValidFoodNames(GameObject prefab, HashSet<string> visited)
-    {
-        HashSet<string> foods = new(StringComparer.OrdinalIgnoreCase);
-        if ((object?)prefab == null || !visited.Add(prefab.name))
-        {
-            return foods;
-        }
-
-        MonsterAI? monsterAI = prefab.GetComponent<MonsterAI>();
-        Tameable? tameable = prefab.GetComponent<Tameable>();
-        if ((object?)monsterAI != null && (object?)tameable != null && monsterAI.m_consumeItems != null)
-        {
-            foreach (ItemDrop consumeItem in monsterAI.m_consumeItems)
-            {
-                if ((object?)consumeItem != null)
-                {
-                    foods.Add(((Component)consumeItem).gameObject.name);
-                }
-            }
-
-        }
-
-        Growup? growup = prefab.GetComponent<Growup>();
-        foreach (GameObject target in EnumerateGrowthTargets(growup))
-        {
-            foods.UnionWith(CollectValidFoodNames(target, visited));
-        }
-
-        return foods;
     }
 
     private static IEnumerable<GameObject> EnumerateGrowthTargets(Growup? growup)

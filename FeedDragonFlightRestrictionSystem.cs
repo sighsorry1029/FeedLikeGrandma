@@ -69,29 +69,7 @@ internal static class FeedDragonFlightRestrictionSystem
             return true;
         }
 
-        if (!TryGetRidingDragon(player, out _, out Character? mount) || (object?)mount == null)
-        {
-            return true;
-        }
-
-        if (IsEncumberedFlightBlocked(player))
-        {
-            CancelFlying(mount);
-            ResetBetterRidingFlightKeyState();
-            ShowEncumberedRestrictedMessage(player);
-            return false;
-        }
-
-        Heightmap.Biome biome = GetFreshBiome(player, mount);
-        if (!RefreshRestrictionState(player, biome, cancelFlying: true, showWhenCanceled: false))
-        {
-            return true;
-        }
-
-        CancelFlying(mount);
-        ResetBetterRidingFlightKeyState();
-        ShowBiomeRestrictedMessage(player);
-        return false;
+        return !TryCancelRestrictedFlightToggle(player);
     }
 
     internal static void CancelFlightToggleAfterSetControls(Player player)
@@ -101,9 +79,14 @@ internal static class FeedDragonFlightRestrictionSystem
             return;
         }
 
+        TryCancelRestrictedFlightToggle(player);
+    }
+
+    private static bool TryCancelRestrictedFlightToggle(Player player)
+    {
         if (!TryGetRidingDragon(player, out _, out Character? mount) || (object?)mount == null)
         {
-            return;
+            return false;
         }
 
         if (IsEncumberedFlightBlocked(player))
@@ -111,18 +94,19 @@ internal static class FeedDragonFlightRestrictionSystem
             CancelFlying(mount);
             ResetBetterRidingFlightKeyState();
             ShowEncumberedRestrictedMessage(player);
-            return;
+            return true;
         }
 
         Heightmap.Biome biome = GetFreshBiome(player, mount);
         if (!RefreshRestrictionState(player, biome, cancelFlying: true, showWhenCanceled: false))
         {
-            return;
+            return false;
         }
 
         CancelFlying(mount);
         ResetBetterRidingFlightKeyState();
         ShowBiomeRestrictedMessage(player);
+        return true;
     }
 
     internal static void EnforceRestrictedFlightBeforeSaddleControls(Sadle saddle)
@@ -196,7 +180,7 @@ internal static class FeedDragonFlightRestrictionSystem
             !state.Restricted)
         {
             if (IsFlightToggleKeyHeld() &&
-                TryGetRestrictedRidingDragon(player, forceBiomeRefresh: true, out Character? restrictedMount, out _))
+                TryGetRestrictedRidingDragon(player, out Character? restrictedMount))
             {
                 CancelFlying(restrictedMount);
                 ResetBetterRidingFlightKeyState();
@@ -299,17 +283,16 @@ internal static class FeedDragonFlightRestrictionSystem
         return restricted;
     }
 
-    private static bool TryGetRestrictedRidingDragon(Player player, bool forceBiomeRefresh, out Character? mount, out Heightmap.Biome biome)
+    private static bool TryGetRestrictedRidingDragon(Player player, out Character? mount)
     {
         mount = null;
-        biome = Heightmap.Biome.None;
         if (!TryGetRidingDragon(player, out _, out mount) || (object?)mount == null)
         {
             ClearRestrictionState(player);
             return false;
         }
 
-        biome = forceBiomeRefresh ? GetFreshBiome(player, mount) : player.GetCurrentBiome();
+        Heightmap.Biome biome = GetFreshBiome(player, mount);
         return RefreshRestrictionState(player, biome, cancelFlying: true, showWhenCanceled: false);
     }
 

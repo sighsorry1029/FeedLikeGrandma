@@ -14,6 +14,9 @@
         <FileAlignment>512</FileAlignment>
         <LangVersion>preview</LangVersion>
         <Nullable>enable</Nullable>
+        <DeployOnBuild Condition="'$(DeployOnBuild)' == ''">true</DeployOnBuild>
+        <DeployToGame Condition="'$(DeployToGame)' == ''">$(DeployOnBuild)</DeployToGame>
+        <PackageOnBuild Condition="'$(PackageOnBuild)' == ''">true</PackageOnBuild>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
@@ -206,18 +209,18 @@
             <PackageDir>$(ProjectDir)\Thunderstore\$(PackageName)</PackageDir>
         </PropertyGroup>
     </Target>
-    <Target Name="CopyOutputDLL" AfterTargets="GetAssemblyVersion">
+    <Target Name="CopyOutputDLL" AfterTargets="GetAssemblyVersion" Condition="'$(DeployToGame)' == 'true'">
         <Error Text="DLL not found in target directory." Condition="!Exists('$(TargetDir)$(AssemblyName).dll')"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath)" OverwriteReadOnlyFiles="true"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath2)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath2)')"/>
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath3)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath3)')"/>
     </Target>
-    <Target Name="CopyReadmeToPackageDir" AfterTargets="CopyOutputDLL" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
+    <Target Name="CopyReadmeToPackageDir" AfterTargets="GetAssemblyVersion" Condition="'$(PackageOnBuild)' == 'true' And ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT')">
         <Error Text="README.md not found in project directory. Root README.md is the single README source for the Thunderstore package." Condition="!Exists('README.md')"/>
         <MakeDir Directories="$(PackageDir)"/>
         <Copy SourceFiles="README.md" DestinationFolder="$(PackageDir)" OverwriteReadOnlyFiles="true"/>
     </Target>
-    <Target Name="UpdateManifestVersion" AfterTargets="CopyReadmeToPackageDir" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
+    <Target Name="UpdateManifestVersion" AfterTargets="CopyReadmeToPackageDir" Condition="'$(PackageOnBuild)' == 'true' And ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT')">
         <ItemGroup>
             <ManifestFile Include="$(ProjectDir)Thunderstore\manifest.json"/>
         </ItemGroup>
@@ -226,7 +229,7 @@
         <Message Text="Updating version number in Thunderstore\manifest.json" Condition="Exists(@(ManifestFile))"/>
         <Exec Command="powershell.exe -ExecutionPolicy Bypass -Command &quot;&amp; { &amp; '$(ProjectDir)UpdateManifest.ps1' -manifestFile '@(ManifestFile)' -versionString '$(PackageVersion)' }&quot;"/>
     </Target>
-    <Target Name="MakeThunderstorePackage" AfterTargets="UpdateManifestVersion" Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Target Name="MakeThunderstorePackage" AfterTargets="UpdateManifestVersion" Condition="'$(PackageOnBuild)' == 'true' And ('$(Configuration)|$(Platform)' == 'Release|AnyCPU')">
         <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)\Thunderstore\manifest.json')"/>
         <Error Text="icon.png not found in Thunderstore directory. Please note that Thunderstore requires this image to be 256x256 in dimension" Condition="!Exists('$(ProjectDir)\Thunderstore\icon.png')"/>
         <Error Text="English.yml not found in translations directory." Condition="!Exists('$(ProjectDir)\translations\English.yml')"/>
@@ -242,7 +245,7 @@
         <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="Thunderstore\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(PackageDir)"/>
     </Target>
-    <Target Name="MakeNexusPackage" AfterTargets="MakeThunderstorePackage" Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <Target Name="MakeNexusPackage" AfterTargets="MakeThunderstorePackage" Condition="'$(PackageOnBuild)' == 'true' And ('$(Configuration)|$(Platform)' == 'Release|AnyCPU')">
         <MakeDir Directories="$(ProjectDir)\Nexus"/>
         <ItemGroup>
             <NexusPackageFiles Include="$(TargetDir)$(AssemblyName).dll;"/>

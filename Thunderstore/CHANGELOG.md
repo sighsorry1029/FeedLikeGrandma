@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2
+
+- Prevented damaged or unsupported Taming Orb data from being overwritten by a new capture. Capture failures now restore item state only after the transaction has staged its own changes.
+- Kept existing Orb release transactions valid when the recipe is disabled while waiting for confirmation, and ignored late failed approvals after spawning to avoid leaving both a released creature and a reusable filled Orb.
+- Fixed Player argument forwarding in the Monstrum and MonstrumDeepNorth mount-jump compatibility patches.
+- Rejected non-finite YAML numbers such as NaN and Infinity while keeping the previous feed rules active after invalid configuration changes.
+- Removed redundant food-rule searches and simplified flight restrictions and Orb retries. Grouped manual-feed and icon code without changing Orb v3 serialization or RPC formats.
+- Added regression checks for YAML configuration and Orb v3 saves, and supported Debug deployment through DeployToGame with independently controlled release packaging.
+
 ## 1.1.1
 
 - Reworked manual feeding into a server-coordinated two-phase transaction with exact inventory reservations, target locks, idempotent retries, and owner-migration handling for reliable dedicated-server multiplayer.

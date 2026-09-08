@@ -52,7 +52,6 @@ internal static partial class TamingOrbSystem
 
     private static GameObject? _prefab;
     private static GameObject? _prefabContainer;
-    private static Sprite? _icon;
     private static ItemDrop.ItemData.SharedData? _tamingOrbSharedData;
 
     internal static void RegisterNetworkRpcs()
@@ -140,7 +139,7 @@ internal static partial class TamingOrbSystem
             return true;
         }
 
-        if (TryReadPayload(item, out CapturedTamePayload? _))
+        if (item.m_customData.ContainsKey(PayloadKey))
         {
             TryRelease(player, item);
             return true;
@@ -170,7 +169,7 @@ internal static partial class TamingOrbSystem
             return true;
         }
 
-        if (TryReadPayload(item, out CapturedTamePayload? _))
+        if (item.m_customData.ContainsKey(PayloadKey))
         {
             TryRelease(player, item);
             return true;
@@ -711,40 +710,6 @@ internal static partial class TamingOrbSystem
         itemDrop.m_itemData.m_variant = 0;
     }
 
-    internal static bool TryGetIcon(ItemDrop.ItemData item, out Sprite? icon)
-    {
-        icon = null;
-        if (!IsTamingOrb(item))
-        {
-            return false;
-        }
-
-        item.m_variant = 0;
-        if (TryReadPayload(item, out CapturedTamePayload? payload, logWarnings: false))
-        {
-            try
-            {
-                int variant = GetIconVariantForPayload(item, payload!);
-                if (IsIconVariantValid(item.m_shared, variant))
-                {
-                    icon = item.m_shared.m_icons[variant];
-                }
-            }
-            catch (Exception ex)
-            {
-                FeedLikeGrandmaPlugin.Log.LogDebug(
-                    $"Could not resolve {PrefabName} icon for {payload!.Prefab}: {ex.Message}");
-            }
-        }
-
-        if ((object?)icon == null && item.m_shared.m_icons is { Length: > 0 })
-        {
-            icon = item.m_shared.m_icons[0];
-        }
-
-        return true;
-    }
-
     internal static void NormalizeWorldItemVariant(ItemDrop itemDrop)
     {
         if ((object?)itemDrop == null || !IsTamingOrb(itemDrop.m_itemData))
@@ -1054,18 +1019,13 @@ internal static partial class TamingOrbSystem
                (object?)prefab.GetComponentInChildren<Collider>(true) != null;
     }
 
-    private static Material? CreateSafeVisualMaterial(Material? preferred, Material? fallback)
+    private static Material? CreateSafeVisualMaterial(Material? preferred)
     {
         try
         {
             if ((object?)preferred != null)
             {
                 return new Material(preferred);
-            }
-
-            if ((object?)fallback != null)
-            {
-                return new Material(fallback);
             }
         }
         catch (Exception ex)
@@ -1100,7 +1060,7 @@ internal static partial class TamingOrbSystem
         Material[] sharedMaterials = renderer.sharedMaterials;
         for (int i = 0; i < sharedMaterials.Length; i++)
         {
-            Material? material = CreateSafeVisualMaterial(sharedMaterials[i], null);
+            Material? material = CreateSafeVisualMaterial(sharedMaterials[i]);
             if ((object?)material == null)
             {
                 continue;

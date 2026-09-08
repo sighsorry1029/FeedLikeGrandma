@@ -291,9 +291,9 @@ internal static class MonstrumUpdateDoodadControlsCompatibilityPatch
         return FeedMonstrumCompatibility.GetUpdateDoodadControlsPostfix(FeedMonstrumCompatibility.Package.Monstrum);
     }
 
-    private static bool Prefix(Player __instance)
+    private static bool Prefix(Player __0)
     {
-        return !FeedMonstrumCompatibility.ShouldSkipJumpDismountPostfix(__instance, FeedMonstrumCompatibility.Package.Monstrum);
+        return !FeedMonstrumCompatibility.ShouldSkipJumpDismountPostfix(__0, FeedMonstrumCompatibility.Package.Monstrum);
     }
 }
 
@@ -329,9 +329,9 @@ internal static class MonstrumDeepNorthUpdateDoodadControlsCompatibilityPatch
         return FeedMonstrumCompatibility.GetUpdateDoodadControlsPostfix(FeedMonstrumCompatibility.Package.MonstrumDeepNorth);
     }
 
-    private static bool Prefix(Player __instance)
+    private static bool Prefix(Player __0)
     {
-        return !FeedMonstrumCompatibility.ShouldSkipJumpDismountPostfix(__instance, FeedMonstrumCompatibility.Package.MonstrumDeepNorth);
+        return !FeedMonstrumCompatibility.ShouldSkipJumpDismountPostfix(__0, FeedMonstrumCompatibility.Package.MonstrumDeepNorth);
     }
 }
 

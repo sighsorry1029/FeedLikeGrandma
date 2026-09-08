@@ -80,6 +80,133 @@ internal static partial class FeedSystem
         _manualFeedRpcInstance = null;
     }
 
+    private static FeedResponseMessage ProcessFeedRequest(
+        GameObject targetObject,
+        FeedRequestMessage request,
+        Player requester)
+    {
+        if (!TryBuildManualFeedPlan(
+                targetObject,
+                request,
+                requester,
+                out FeedTargetContext context,
+                out FeedEffectPlan plan,
+                out FeedResponseMessage response))
+        {
+            return response;
+        }
+
+        response.Success = true;
+        response.ConsumedAmount = plan.Amount;
+        TriggerConsumeAnimation(context);
+
+        if ((object?)context.Tameable != null && plan.FedDeltaRequested > 0f)
+        {
+            response.FedDelta = AddFedTime(context, plan.FedDeltaRequested);
+        }
+
+        response.TameDelta = ApplyTameDelta(context, plan.TameDeltaRequested);
+
+        response.GrowthDelta = ApplyGrowthDelta(context, plan.GrowthDeltaRequested, out bool grewThisFeed);
+
+        if (plan.StarDeltaRequested > 0)
+        {
+            response.StarDelta = ApplyStarProgress(context, plan.StarDeltaRequested);
+        }
+
+        if (!grewThisFeed)
+        {
+            response.HealPercent = ApplyHealPercent(context, plan.HealPercentRequested);
+        }
+
+        if (!grewThisFeed)
+        {
+            long cooldownTicksToSet = ZNet.instance.GetTime().AddSeconds(FeedLikeGrandmaPlugin.FeedCooldownSeconds.Value).Ticks;
+            context.NView.GetZDO().Set(FeedCooldownHash, cooldownTicksToSet);
+            response.DisplayPosition = context.Character.GetTopPoint();
+        }
+
+        return response;
+    }
+
+    private static bool TryBuildManualFeedPlan(
+        GameObject targetObject,
+        FeedRequestMessage request,
+        Player requester,
+        out FeedTargetContext context,
+        out FeedEffectPlan plan,
+        out FeedResponseMessage response)
+    {
+        context = default;
+        plan = new FeedEffectPlan();
+        response = new FeedResponseMessage
+        {
+            TransactionId = request.TransactionId,
+            ItemPrefabName = request.ItemPrefabName,
+            TargetId = request.TargetId,
+            Message = string.Empty
+        };
+
+        if (!TryBuildContext(targetObject, out context))
+        {
+            response.Message = FeedLocalization.Text("$flg_feed_target_not_configured");
+            return false;
+        }
+
+        response.TargetId = context.NView.GetZDO().m_uid;
+        response.DisplayPosition = context.Character.GetTopPoint();
+
+        if ((object?)context.BaseAI != null && context.BaseAI.IsAlerted())
+        {
+            response.Message = FeedLocalization.Format("$flg_feed_target_alerted", context.Character.GetHoverName());
+            return false;
+        }
+
+        int requestQuality = Mathf.Max(1, request.ItemQuality);
+        if (!TryGetFeedEntriesForItem(context, request.ItemPrefabName, requestQuality, out ResolvedFoodEntry? dailyFood, out ResolvedFoodEntry? levelUpFood, out bool hasLevelUpItems))
+        {
+            response.Message = FeedLocalization.Text("$flg_feed_invalid_item");
+            return false;
+        }
+
+        int amount = Mathf.Min(request.RequestedAmount, FeedLikeGrandmaPlugin.MaxItemsPerFeed.Value);
+        if (amount <= 0)
+        {
+            response.Message = FeedLocalization.Text("$flg_feed_no_items_consumed");
+            return false;
+        }
+
+        long nowTicks = ZNet.instance.GetTime().Ticks;
+        long cooldownUntilTicks = context.NView.GetZDO().GetLong(FeedCooldownHash, 0L);
+        if (cooldownUntilTicks > nowTicks)
+        {
+            TimeSpan remaining = new(cooldownUntilTicks - nowTicks);
+            response.Message = FeedLocalization.Format("$flg_feed_cooldown", remaining.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture));
+            return false;
+        }
+
+        bool requesterHasTamingBoost = requester.GetSEMan()
+            .HaveStatusAttribute(StatusEffect.StatusAttribute.TamingBoost);
+        float feedMultiplier = requesterHasTamingBoost
+            ? FeedLikeGrandmaPlugin.GetFeedBoostMultiplier()
+            : 1f;
+        plan = BuildFeedEffectPlan(
+            context,
+            dailyFood,
+            levelUpFood,
+            hasLevelUpItems,
+            amount,
+            feedMultiplier);
+
+        if (plan.HasAnyEffect)
+        {
+            return true;
+        }
+
+        response.Message = FeedLocalization.Text("$flg_feed_no_effect");
+        return false;
+    }
+
     private static bool TryStartManualFeedTransaction(Player player, GameObject targetObject, ItemDrop.ItemData item)
     {
         if (!TryBuildContext(targetObject, out FeedTargetContext context) ||

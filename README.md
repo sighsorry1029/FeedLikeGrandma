@@ -363,5 +363,19 @@ Recommended workflow:
 5. Add food numbers or `levelUpItems` as needed.
 6. Save the file and let live reload apply it.
 
+## Building and checking changes
+
+Build with the .NET SDK, the .NET Framework 4.8 targeting pack, and the Valheim/BepInEx references configured in `environment.props`. Builds merge ServerSync and YamlDotNet into the plugin DLL.
+
+For development and verification, use Debug and automatically copy the final merged plugin DLL to the configured game folder:
+
+```powershell
+dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true
+```
+
+Use `DeployToGame=false` to skip the game-folder copy. If omitted, it falls back to the legacy `DeployOnBuild` setting. `PackageOnBuild=true` remains the default for Release builds, which update the manifest and create release ZIPs. Run Release only for an intended release: a registered Mod Release Manager watch folder can automatically publish the generated ZIP. Packaging and game-folder deployment are independent.
+
+See [regression checks](https://github.com/sighsorry1029/FeedLikeGrandma/tree/main/tests) for the .NET Framework test runner and the separate in-game scenarios.
+
 ## Github
 https://github.com/sighsorry1029/FeedLikeGrandma

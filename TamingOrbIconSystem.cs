@@ -23,8 +23,43 @@ internal static partial class TamingOrbSystem
     private static readonly HashSet<string> CreatureIconFailures = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<Type, List<Type>> IconComponentDependencies = new();
 
+    private static Sprite? _icon;
     private static Camera? _iconCamera;
     private static Light? _iconLight;
+
+    internal static bool TryGetIcon(ItemDrop.ItemData item, out Sprite? icon)
+    {
+        icon = null;
+        if (!IsTamingOrb(item))
+        {
+            return false;
+        }
+
+        item.m_variant = 0;
+        if (TryReadPayload(item, out CapturedTamePayload? payload, logWarnings: false))
+        {
+            try
+            {
+                int variant = GetIconVariantForPayload(item, payload!);
+                if (IsIconVariantValid(item.m_shared, variant))
+                {
+                    icon = item.m_shared.m_icons[variant];
+                }
+            }
+            catch (Exception ex)
+            {
+                FeedLikeGrandmaPlugin.Log.LogDebug(
+                    $"Could not resolve {PrefabName} icon for {payload!.Prefab}: {ex.Message}");
+            }
+        }
+
+        if ((object?)icon == null && item.m_shared.m_icons is { Length: > 0 })
+        {
+            icon = item.m_shared.m_icons[0];
+        }
+
+        return true;
+    }
 
     private static void ShutdownIconPipeline()
     {
