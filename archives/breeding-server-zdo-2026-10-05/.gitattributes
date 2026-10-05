@@ -1,0 +1,5 @@
+snapshot/** -text
+baseline/** -text
+artifacts/** -text
+reapply.patch -text
+SHA256.json -text

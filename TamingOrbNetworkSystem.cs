@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 
 namespace FeedLikeGrandma;
@@ -8,18 +9,18 @@ namespace FeedLikeGrandma;
 internal static partial class TamingOrbSystem
 {
     // The server arbitrates locks, the creature owner captures live state, and the requesting peer owns release spawning.
-    private const string CaptureRequestServerRpc = "FLG_OrbCaptureRequestServer";
-    private const string CapturePrepareOwnerRpc = "FLG_OrbCapturePrepareOwner";
-    private const string CapturePreparedServerRpc = "FLG_OrbCapturePreparedServer";
-    private const string CapturePreparedClientRpc = "FLG_OrbCapturePreparedClient";
-    private const string CaptureCommitServerRpc = "FLG_OrbCaptureCommitServer";
-    private const string CaptureCommitOwnerRpc = "FLG_OrbCaptureCommitOwner";
-    private const string CaptureResultServerRpc = "FLG_OrbCaptureResultServer";
-    private const string CaptureResultClientRpc = "FLG_OrbCaptureResultClient";
-    private const string ReleaseRequestServerRpc = "FLG_OrbReleaseRequestServer";
-    private const string ReleaseApprovedClientRpc = "FLG_OrbReleaseApprovedClient";
-    private const string ReleaseResultServerRpc = "FLG_OrbReleaseResultServer";
-    private const string ReleaseResultClientRpc = "FLG_OrbReleaseResultClient";
+    private const string CaptureRequestServerRpc = "FLG_OrbCaptureRequestServer_v2";
+    private const string CapturePrepareOwnerRpc = "FLG_OrbCapturePrepareOwner_v2";
+    private const string CapturePreparedServerRpc = "FLG_OrbCapturePreparedServer_v2";
+    private const string CapturePreparedClientRpc = "FLG_OrbCapturePreparedClient_v2";
+    private const string CaptureCommitServerRpc = "FLG_OrbCaptureCommitServer_v2";
+    private const string CaptureCommitOwnerRpc = "FLG_OrbCaptureCommitOwner_v2";
+    private const string CaptureResultServerRpc = "FLG_OrbCaptureResultServer_v2";
+    private const string CaptureResultClientRpc = "FLG_OrbCaptureResultClient_v2";
+    private const string ReleaseRequestServerRpc = "FLG_OrbReleaseRequestServer_v2";
+    private const string ReleaseApprovedClientRpc = "FLG_OrbReleaseApprovedClient_v2";
+    private const string ReleaseResultServerRpc = "FLG_OrbReleaseResultServer_v2";
+    private const string ReleaseResultClientRpc = "FLG_OrbReleaseResultClient_v2";
     private const string OrbIdentityKey = "flg.tame.orbId";
     private const float OrbNetworkRetrySeconds = 1f;
     private const float OrbPrepareTimeoutSeconds = 30f;
@@ -27,6 +28,10 @@ internal static partial class TamingOrbSystem
     private const long OrbCompletedRetentionTicks = TimeSpan.TicksPerMinute * 5;
     private const int MaxOrbServerTransactions = 512;
     private static readonly int ReleaseTransactionHash = "flg_taming_orb_release_tx".GetStableHashCode();
+    private static readonly int ReleaseOrbHash = "flg_taming_orb_release_orb".GetStableHashCode();
+    private static readonly int ReleaseOriginHash = "flg_taming_orb_release_origin".GetStableHashCode();
+    private static readonly int ReleaseReadyHash = "flg_taming_orb_release_ready".GetStableHashCode();
+    private static readonly int CaptureTransactionHash = "flg_taming_orb_capture_tx".GetStableHashCode();
 
     private static readonly Dictionary<string, ClientCaptureTransaction> ClientCaptureTransactions = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, ServerCaptureTransaction> ServerCaptureTransactions = new(StringComparer.Ordinal);
@@ -45,6 +50,8 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        ShutdownOrbTransactions();
+
         RegisterOrbRpc(routedRpc, CaptureRequestServerRpc, ReceiveCaptureRequestOnServer);
         RegisterOrbRpc(routedRpc, CapturePrepareOwnerRpc, ReceiveCapturePrepareOnOwner);
         RegisterOrbRpc(routedRpc, CapturePreparedServerRpc, ReceiveCapturePreparedOnServer);
@@ -57,6 +64,8 @@ internal static partial class TamingOrbSystem
         RegisterOrbRpc(routedRpc, ReleaseApprovedClientRpc, ReceiveReleaseApprovalOnClient);
         RegisterOrbRpc(routedRpc, ReleaseResultServerRpc, ReceiveReleaseResultOnServer);
         RegisterOrbRpc(routedRpc, ReleaseResultClientRpc, ReceiveReleaseResultOnClient);
+        RegisterOrbRpc(routedRpc, OrbRecoveryServerRpc, ReceiveOrbRecoveryOnServer);
+        RegisterOrbRpc(routedRpc, OrbRecoveryClientRpc, ReceiveOrbRecoveryOnClient);
         _orbRpcInstance = routedRpc;
     }
 
@@ -65,7 +74,7 @@ internal static partial class TamingOrbSystem
         string name,
         Action<long, ZPackage> handler)
     {
-        if (!routedRpc.m_functions.ContainsKey(name.GetStableHashCode()))
+        if (!routedRpc.RpcHandlers().Contains(name.GetStableHashCode()))
         {
             routedRpc.Register(name, handler);
         }
@@ -73,6 +82,8 @@ internal static partial class TamingOrbSystem
 
     private static void ShutdownOrbTransactions()
     {
+        CloseOrbJournal();
+        OrbRecoveryRequests.Clear();
         ClientCaptureTransactions.Clear();
         ServerCaptureTransactions.Clear();
         ServerCaptureLocks.Clear();
@@ -114,6 +125,12 @@ internal static partial class TamingOrbSystem
             LastSentRealtime = Time.realtimeSinceStartup
         };
         ClientCaptureTransactions[request.TransactionId] = transaction;
+        if (!BeginOrbItemTransaction(item, request.OrbId, request.TransactionId, OrbPendingAction.Capture, request.Write()))
+        {
+            ClientCaptureTransactions.Remove(request.TransactionId);
+            return false;
+        }
+        player.GetInventory().Changed();
         routedRpc.InvokeRoutedRPC(serverPeerId, CaptureRequestServerRpc, request.Write());
         FeedLikeGrandmaPlugin.Instance.StartCoroutine(CompleteCaptureDelay(request.TransactionId, delay));
         FeedLikeGrandmaPlugin.Instance.StartCoroutine(RetryCaptureTransaction(request.TransactionId));
@@ -144,15 +161,15 @@ internal static partial class TamingOrbSystem
             if ((object?)Player.m_localPlayer == null ||
                 !Player.m_localPlayer.GetZDOID().Equals(transaction.Request.RequesterId))
             {
+                ClientCaptureTransactions.Remove(transactionId);
                 yield break;
             }
 
             if (transaction.Phase == OrbCaptureClientPhase.Requesting &&
                 Time.realtimeSinceStartup - transaction.StartedRealtime >= OrbPrepareTimeoutSeconds)
             {
-                FinishCaptureClientFailure(
-                    transaction,
-                    FeedLocalization.Text("$flg_taming_orb_network_timeout"));
+                ClientCaptureTransactions.Remove(transactionId);
+                FeedLocalization.Message(Player.m_localPlayer, "$flg_taming_orb_recovery_blocked");
                 yield break;
             }
 
@@ -183,12 +200,6 @@ internal static partial class TamingOrbSystem
             return;
         }
 
-        if (!IsEnabled())
-        {
-            SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_disabled")));
-            return;
-        }
-
         CleanupOrbServerTransactions();
         if (ServerCaptureTransactions.TryGetValue(request.TransactionId, out ServerCaptureTransaction? existing))
         {
@@ -214,21 +225,32 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        if (!IsEnabled())
+        {
+            SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_disabled")));
+            return;
+        }
         if (ServerCaptureTransactions.Count >= MaxOrbServerTransactions)
         {
             SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_target_busy")));
             return;
         }
 
+        if (HandleRecordedCaptureRequest(sender, request)) return;
         ZDO? requesterZdo = ZDOMan.instance.GetZDO(request.RequesterId);
         ZDO? targetZdo = ZDOMan.instance.GetZDO(request.TargetId);
         if (requesterZdo == null || targetZdo == null ||
-            Vector3.Distance(requesterZdo.m_position, targetZdo.m_position) > CaptureRange + 1f)
+            Vector3.Distance(requesterZdo.GetPosition(), targetZdo.GetPosition()) > CaptureRange + 1f)
         {
             SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_too_far")));
             return;
         }
 
+        if (!CanCaptureReleasedCreature(targetZdo) || HasUnresolvedCaptureForTarget(request.TargetId))
+        {
+            SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_target_busy")));
+            return;
+        }
         if (ServerCaptureLocks.TryGetValue(request.TargetId, out string lockedBy) &&
             !lockedBy.Equals(request.TransactionId, StringComparison.Ordinal))
         {
@@ -250,6 +272,11 @@ internal static partial class TamingOrbSystem
             Phase = OrbCaptureServerPhase.Preparing,
             UpdatedAtTicks = OrbNetworkTimeTicks()
         };
+        if (!PersistCapture(transaction, TamingOrbJournal.Reserved))
+        {
+            SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
+            return;
+        }
         ServerCaptureTransactions[request.TransactionId] = transaction;
         ServerCaptureLocks[request.TargetId] = request.TransactionId;
         ServerOrbActionLocks[request.OrbId] = request.TransactionId;
@@ -302,6 +329,8 @@ internal static partial class TamingOrbSystem
             {
                 try
                 {
+                    nview!.GetZDO().Set(CaptureTransactionHash, request.TransactionId);
+                    ZDOMan.instance.ForceSendZDO(nview.GetZDO().m_uid);
                     CapturedTamePayload payload = CapturePayload(character!, tameable, nview!, prefabName);
                     prepared.Payload = payload.Serialize();
                     prepared.CreatureManagerState =
@@ -360,6 +389,7 @@ internal static partial class TamingOrbSystem
         }
 
         transaction.Prepared = prepared;
+        if (!PersistCapture(transaction, TamingOrbJournal.Reserved)) return;
         transaction.Phase = OrbCaptureServerPhase.Prepared;
         transaction.UpdatedAtTicks = OrbNetworkTimeTicks();
         SendCapturePreparedToClient(transaction);
@@ -377,6 +407,7 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        if (transaction.Phase == OrbCaptureClientPhase.Committing) return;
         if (!prepared.Success)
         {
             FinishCaptureClientFailure(transaction, prepared.Message);
@@ -396,12 +427,17 @@ internal static partial class TamingOrbSystem
         }
 
         Player? player = Player.m_localPlayer;
-        if ((object?)player == null || !player.GetInventory().ContainsItem(transaction.Item) ||
+        ItemDrop.ItemData? currentItem = FindTransactionItem(transaction.Request.TransactionId, transaction.Request.OrbId);
+        if (currentItem != null) transaction.Item = currentItem;
+        if ((object?)player == null || currentItem == null ||
             transaction.Item.m_customData.ContainsKey(PayloadKey))
         {
             FinishCaptureClientFailure(transaction, FeedLocalization.Text("$flg_taming_orb_data_changed"));
             return;
         }
+
+        if (!TryReadPendingOrbItem(transaction.Item, out OrbPendingItemState? pending) || pending == null)
+            return;
 
         if (!CapturedTamePayload.TryDeserialize(
                 transaction.Prepared.Payload,
@@ -416,8 +452,10 @@ internal static partial class TamingOrbSystem
         try
         {
             _ = GetIconVariantForPayload(transaction.Item, payload);
-            CaptureItemState(transaction);
-            transaction.ItemStateStaged = true;
+            pending.Phase = OrbPendingPhase.Committing;
+            pending.PreparedData = transaction.Prepared.Write().GetBase64();
+            if (!TryUpdatePendingOrbItem(transaction.Item, pending))
+                throw new InvalidOperationException("Orb transaction identity changed during capture.");
             transaction.Item.m_stack = 1;
             transaction.Item.m_customData[PayloadKey] = transaction.Prepared.Payload;
             SetOrRemoveCustomData(
@@ -468,12 +506,21 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        ZDO? captureTarget = ZDOMan.instance.GetZDO(request.TargetId);
+        if (captureTarget != null && !CanCaptureReleasedCreature(captureTarget)) return;
+        if (!PersistCapture(transaction, TamingOrbJournal.Committing)) return;
         transaction.Phase = OrbCaptureServerPhase.Committing;
         ForwardCaptureCommit(transaction);
     }
 
     private static void ForwardCaptureCommit(ServerCaptureTransaction transaction)
     {
+        if (!EnsureOrbJournal()) return;
+        if (transaction.PendingResult != null && ZDOMan.instance.GetZDO(transaction.Request.TargetId) == null)
+        {
+            CompleteCaptureResult(transaction, transaction.PendingResult);
+            return;
+        }
         if (!TryResolveOrbTargetOwner(transaction.Request.TargetId, out long ownerPeerId))
         {
             if (!transaction.CommitForwarded && ZDOMan.instance?.GetZDO(transaction.Request.TargetId) == null)
@@ -540,9 +587,8 @@ internal static partial class TamingOrbSystem
             }
             catch (Exception ex)
             {
-                OwnerCaptureResults.Remove(request.TransactionId);
-                result.Success = false;
-                result.Message = FeedLocalization.Text("$flg_taming_orb_cannot_capture");
+                // Destroy may have queued the deletion before throwing. Keep the success candidate;
+                // the server still requires actual disappearance before committing it.
                 FeedLikeGrandmaPlugin.Log.LogWarning(
                     $"{PrefabName} owner failed to commit capture for {request.ExpectedPrefab}: {ex.Message}");
             }
@@ -580,6 +626,19 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        if (transaction.PendingResult != null && !result.Success) return;
+        if (result.Success && ZDOMan.instance.GetZDO(transaction.Request.TargetId) != null)
+        {
+            // Owner Destroy queues a network deletion; success is final only after the server observes it.
+            transaction.PendingResult = result;
+            return;
+        }
+        CompleteCaptureResult(transaction, result);
+    }
+
+    private static void CompleteCaptureResult(ServerCaptureTransaction transaction, OrbCaptureResult result)
+    {
+        if (!PersistCapture(transaction, result.Success ? TamingOrbJournal.CompletedSuccess : TamingOrbJournal.CompletedFailure, result)) return;
         transaction.Result = result;
         transaction.Phase = OrbCaptureServerPhase.Completed;
         transaction.UpdatedAtTicks = OrbNetworkTimeTicks();
@@ -606,7 +665,7 @@ internal static partial class TamingOrbSystem
         }
 
         ClientCaptureTransactions.Remove(result.TransactionId);
-        PendingItems.Remove(transaction.Item);
+        ResolveOrbItem(transaction.Request.TransactionId, transaction.Request.OrbId, true, transaction.Prepared?.Write().GetBase64() ?? string.Empty);
         if ((object?)player != null &&
             CapturedTamePayload.TryDeserialize(transaction.Prepared!.Payload, out CapturedTamePayload? payload, logWarnings: false) &&
             payload != null)
@@ -654,6 +713,12 @@ internal static partial class TamingOrbSystem
             LastSentRealtime = Time.realtimeSinceStartup
         };
         ClientReleaseTransactions[request.TransactionId] = transaction;
+        if (!BeginOrbItemTransaction(item, request.OrbId, request.TransactionId, OrbPendingAction.Release, request.Write()))
+        {
+            ClientReleaseTransactions.Remove(request.TransactionId);
+            return false;
+        }
+        player.GetInventory().Changed();
         routedRpc.InvokeRoutedRPC(serverPeerId, ReleaseRequestServerRpc, request.Write());
         FeedLikeGrandmaPlugin.Instance.StartCoroutine(CompleteReleaseDelay(request.TransactionId, delay));
         FeedLikeGrandmaPlugin.Instance.StartCoroutine(RetryReleaseTransaction(request.TransactionId));
@@ -684,16 +749,15 @@ internal static partial class TamingOrbSystem
             if ((object?)Player.m_localPlayer == null ||
                 !Player.m_localPlayer.GetZDOID().Equals(transaction.Request.RequesterId))
             {
+                ClientReleaseTransactions.Remove(transactionId);
                 yield break;
             }
 
             if (!transaction.SpawnAttempted &&
                 Time.realtimeSinceStartup - transaction.StartedRealtime >= OrbPrepareTimeoutSeconds)
             {
-                FinishReleaseClient(
-                    transaction,
-                    success: false,
-                    FeedLocalization.Text("$flg_taming_orb_network_timeout"));
+                ClientReleaseTransactions.Remove(transactionId);
+                FeedLocalization.Message(Player.m_localPlayer, "$flg_taming_orb_recovery_blocked");
                 yield break;
             }
 
@@ -759,6 +823,7 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        if (HandleRecordedReleaseRequest(sender, request)) return;
         if (ServerOrbActionLocks.TryGetValue(request.OrbId, out string lockedBy) &&
             !lockedBy.Equals(request.TransactionId, StringComparison.Ordinal))
         {
@@ -768,7 +833,7 @@ internal static partial class TamingOrbSystem
 
         ZDO? requesterZdo = ZDOMan.instance.GetZDO(request.RequesterId);
         if (requesterZdo == null ||
-            Vector3.Distance(requesterZdo.m_position, request.SpawnPosition) > ReleaseAimRange + ReleaseUpOffset + 2f)
+            Vector3.Distance(requesterZdo.GetPosition(), request.SpawnPosition) > ReleaseAimRange + ReleaseUpOffset + 2f)
         {
             SendReleaseApprovalToPeer(sender, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_release_failed")));
             return;
@@ -780,6 +845,11 @@ internal static partial class TamingOrbSystem
             RequesterPeerId = sender,
             UpdatedAtTicks = OrbNetworkTimeTicks()
         };
+        if (!PersistReleaseResult(transaction, null))
+        {
+            SendReleaseApprovalToPeer(sender, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
+            return;
+        }
         ServerReleaseTransactions[request.TransactionId] = transaction;
         ServerOrbActionLocks[request.OrbId] = request.TransactionId;
         SendReleaseApprovalToClient(transaction);
@@ -820,7 +890,9 @@ internal static partial class TamingOrbSystem
         }
 
         Player? player = Player.m_localPlayer;
-        if ((object?)player == null || !player.GetInventory().ContainsItem(transaction.Item) ||
+        ItemDrop.ItemData? currentItem = FindTransactionItem(transaction.Request.TransactionId, transaction.Request.OrbId);
+        if (currentItem != null) transaction.Item = currentItem;
+        if ((object?)player == null || currentItem == null ||
             !TryReadPayload(transaction.Item, out CapturedTamePayload? currentPayload, logWarnings: false) ||
             currentPayload == null ||
             !currentPayload.Serialize().Equals(transaction.Request.Payload, StringComparison.Ordinal) ||
@@ -833,10 +905,16 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        if (!TryReadPendingOrbItem(transaction.Item, out OrbPendingItemState? pending) || pending == null)
+            return;
+        pending.Phase = OrbPendingPhase.Spawning;
+        if (!TryUpdatePendingOrbItem(transaction.Item, pending)) return;
+        player.GetInventory().Changed();
         transaction.SpawnAttempted = true;
         GameObject? spawned = null;
         try
         {
+            byte[] inventory = transaction.Payload.DecodeInventory();
             spawned = UnityEngine.Object.Instantiate(
                 transaction.CreaturePrefab,
                 transaction.Request.SpawnPosition,
@@ -850,7 +928,9 @@ internal static partial class TamingOrbSystem
             }
 
             nview.GetZDO().Set(ReleaseTransactionHash, transaction.Request.TransactionId);
-            RestorePayload(transaction.Payload, character, tameable, nview);
+            nview.GetZDO().Set(ReleaseOrbHash, transaction.Request.OrbId);
+            nview.GetZDO().Set(ReleaseOriginHash, transaction.Request.SpawnPosition);
+            RestorePayload(transaction.Payload, inventory, character, tameable, nview);
             if (!string.IsNullOrWhiteSpace(transaction.Request.CreatureManagerState) &&
                 !FeedCreatureModifierCompatibility.RestoreCreatureManagerModifierState(
                     character,
@@ -863,19 +943,39 @@ internal static partial class TamingOrbSystem
             transaction.Result = OrbReleaseResult.SuccessResult(
                 transaction.Request,
                 nview.GetZDO().m_uid);
+            nview.GetZDO().Set(ReleaseReadyHash, 1);
+            ZDOMan.instance.ForceSendZDO(nview.GetZDO().m_uid);
+            ItemDrop.ItemData? pendingItem = FindTransactionItem(transaction.Request.TransactionId, transaction.Request.OrbId);
+            if (pendingItem != null && TryReadPendingOrbItem(pendingItem, out OrbPendingItemState? savedPending) && savedPending != null)
+            {
+                ZDOID spawnedId = nview.GetZDO().m_uid;
+                savedPending.SpawnedId = spawnedId.UserID.ToString(CultureInfo.InvariantCulture) + ":" + spawnedId.ID.ToString(CultureInfo.InvariantCulture);
+                if (TryUpdatePendingOrbItem(pendingItem, savedPending)) player.GetInventory().Changed();
+            }
         }
         catch (Exception ex)
         {
-            if ((object?)spawned != null)
+            if (transaction.Result?.Success == true)
             {
-                DestroySpawnedRelease(spawned);
+                // Restoration is complete. UI/item notification failures cannot roll the creature back.
+                FeedLikeGrandmaPlugin.Log.LogWarning($"Orb release {transaction.Request.TransactionId} completion will be retried: {ex.Message}");
             }
-
-            FeedLikeGrandmaPlugin.Log.LogWarning(
-                $"{PrefabName} failed to release {transaction.Payload.Prefab}: {ex.Message}");
-            transaction.Result = OrbReleaseResult.Failure(
-                transaction.Request,
-                FeedLocalization.Text("$flg_taming_orb_release_failed"));
+            else if ((object?)spawned != null)
+            {
+                // Destruction is asynchronous. Never return a reusable filled orb on unconfirmed cleanup.
+                try { DestroySpawnedRelease(spawned); }
+                catch (Exception cleanupError) { FeedLikeGrandmaPlugin.Log.LogWarning($"Orb release cleanup is unresolved: {cleanupError.Message}"); }
+                FeedLikeGrandmaPlugin.Log.LogWarning($"Orb release {transaction.Request.TransactionId} requires recovery after spawn failure: {ex.Message}");
+                return;
+            }
+            else
+            {
+                FeedLikeGrandmaPlugin.Log.LogWarning(
+                    $"{PrefabName} failed to release {transaction.Payload.Prefab}: {ex.Message}");
+                transaction.Result = OrbReleaseResult.Failure(
+                    transaction.Request,
+                    FeedLocalization.Text("$flg_taming_orb_release_failed"));
+            }
         }
 
         SendReleaseResultToServer(transaction.Result);
@@ -903,23 +1003,16 @@ internal static partial class TamingOrbSystem
         if (result.Success)
         {
             ZDO? spawnedZdo = ZDOMan.instance.GetZDO(result.SpawnedId);
-            if (spawnedZdo == null ||
-                !CapturedTamePayload.TryDeserialize(
-                    transaction.Request.Payload,
-                    out CapturedTamePayload? payload,
-                    logWarnings: false) ||
-                payload == null ||
-                spawnedZdo.GetPrefab() != payload.Prefab.GetStableHashCode() ||
-                Vector3.Distance(spawnedZdo.m_position, transaction.Request.SpawnPosition) > 2f ||
-                !spawnedZdo.GetString(ReleaseTransactionHash, string.Empty)
-                    .Equals(result.TransactionId, StringComparison.Ordinal))
+            if (!IsVerifiedReleasedCreature(spawnedZdo, transaction.Request))
             {
                 return;
             }
         }
 
+        if (!PersistReleaseResult(transaction, result)) return;
         transaction.Result = result;
         transaction.UpdatedAtTicks = OrbNetworkTimeTicks();
+        if (!result.Success) ReleaseReleaseLock(transaction);
         SendReleaseResultToClient(transaction);
     }
 
@@ -946,7 +1039,6 @@ internal static partial class TamingOrbSystem
     private static void FinishReleaseClient(ClientReleaseTransaction transaction, bool success, string message)
     {
         ClientReleaseTransactions.Remove(transaction.Request.TransactionId);
-        PendingItems.Remove(transaction.Item);
         Player? player = Player.m_localPlayer;
         if ((object?)player == null)
         {
@@ -955,15 +1047,12 @@ internal static partial class TamingOrbSystem
 
         if (success)
         {
-            transaction.Item.m_customData.Remove(PayloadKey);
-            transaction.Item.m_customData.Remove(CreatureManagerStateKey);
-            transaction.Item.m_customData[OrbIdentityKey] = Guid.NewGuid().ToString("N");
-            transaction.Item.m_variant = 0;
-            player.GetInventory().Changed();
-            FeedLocalization.Message(player, "$flg_taming_orb_released", GetPayloadDisplayName(transaction.Payload));
+            if (ResolveOrbItem(transaction.Request.TransactionId, transaction.Request.OrbId, true))
+                FeedLocalization.Message(player, "$flg_taming_orb_released", GetPayloadDisplayName(transaction.Payload));
         }
         else
         {
+            ResolveOrbItem(transaction.Request.TransactionId, transaction.Request.OrbId, false);
             player.Message(
                 MessageHud.MessageType.Center,
                 string.IsNullOrWhiteSpace(message)
@@ -975,49 +1064,16 @@ internal static partial class TamingOrbSystem
     private static void FinishCaptureClientFailure(ClientCaptureTransaction transaction, string message)
     {
         ClientCaptureTransactions.Remove(transaction.Request.TransactionId);
-        PendingItems.Remove(transaction.Item);
         Player? player = Player.m_localPlayer;
         if ((object?)player != null)
         {
-            if (transaction.ItemStateStaged && player.GetInventory().ContainsItem(transaction.Item))
-            {
-                RestoreCaptureItemState(transaction, player.GetInventory());
-            }
+            ResolveOrbItem(transaction.Request.TransactionId, transaction.Request.OrbId, false);
 
             if (!string.IsNullOrWhiteSpace(message))
             {
                 player.Message(MessageHud.MessageType.Center, message);
             }
         }
-    }
-
-    private static void CaptureItemState(ClientCaptureTransaction transaction)
-    {
-        transaction.PreviousStack = transaction.Item.m_stack;
-        transaction.PreviousVariant = transaction.Item.m_variant;
-        transaction.HadPayload = transaction.Item.m_customData.TryGetValue(PayloadKey, out string? previousPayload);
-        transaction.PreviousPayload = previousPayload;
-        transaction.HadCreatureManagerState = transaction.Item.m_customData.TryGetValue(
-            CreatureManagerStateKey,
-            out string? previousCreatureManagerState);
-        transaction.PreviousCreatureManagerState = previousCreatureManagerState;
-    }
-
-    private static void RestoreCaptureItemState(ClientCaptureTransaction transaction, Inventory inventory)
-    {
-        transaction.Item.m_stack = transaction.PreviousStack;
-        transaction.Item.m_variant = transaction.PreviousVariant;
-        RestoreCustomData(
-            transaction.Item,
-            PayloadKey,
-            transaction.HadPayload,
-            transaction.PreviousPayload);
-        RestoreCustomData(
-            transaction.Item,
-            CreatureManagerStateKey,
-            transaction.HadCreatureManagerState,
-            transaction.PreviousCreatureManagerState);
-        inventory.Changed();
     }
 
     private static void RestoreCustomData(
@@ -1069,7 +1125,7 @@ internal static partial class TamingOrbSystem
             return false;
         }
 
-        if (sender == ZRoutedRpc.instance.m_id)
+        if (sender == ZRoutedRpc.instance.PeerId())
         {
             Player? localPlayer = Player.m_localPlayer;
             return (object?)localPlayer != null && localPlayer.GetZDOID().Equals(playerId);
@@ -1110,7 +1166,7 @@ internal static partial class TamingOrbSystem
         ZNetView? nview = target?.GetComponent<ZNetView>();
         if ((object?)nview != null && nview.IsValid() && nview.IsOwner())
         {
-            ownerPeerId = ZRoutedRpc.instance.m_id;
+            ownerPeerId = ZRoutedRpc.instance.PeerId();
         }
 
         return ownerPeerId != 0L;
@@ -1159,6 +1215,12 @@ internal static partial class TamingOrbSystem
 
     private static void FailCaptureBeforeCommit(ServerCaptureTransaction transaction, string message)
     {
+        OrbCaptureResult failed = new()
+        {
+            TransactionId = transaction.Request.TransactionId, TargetId = transaction.Request.TargetId,
+            ExpectedPrefab = transaction.Request.ExpectedPrefab, Message = message
+        };
+        if (!PersistCapture(transaction, TamingOrbJournal.CompletedFailure, failed)) return;
         transaction.Prepared = OrbCapturePrepared.Failure(transaction.Request, message);
         SendCapturePreparedToClient(transaction);
         ReleaseCaptureLock(transaction);
@@ -1201,13 +1263,15 @@ internal static partial class TamingOrbSystem
         ServerCaptureTransaction transaction,
         string message)
     {
-        transaction.Result = new OrbCaptureResult
+        OrbCaptureResult result = new OrbCaptureResult
         {
             TransactionId = transaction.Request.TransactionId,
             TargetId = transaction.Request.TargetId,
             ExpectedPrefab = transaction.Request.ExpectedPrefab,
             Message = message
         };
+        if (!PersistCapture(transaction, TamingOrbJournal.CompletedFailure, result)) return;
+        transaction.Result = result;
         transaction.Phase = OrbCaptureServerPhase.Completed;
         transaction.UpdatedAtTicks = OrbNetworkTimeTicks();
         ReleaseCaptureLock(transaction);
@@ -1231,6 +1295,7 @@ internal static partial class TamingOrbSystem
 
     private static void SendReleaseApprovalToClient(ServerReleaseTransaction transaction)
     {
+        if (!EnsureOrbJournal()) return;
         SendReleaseApprovalToPeer(
             transaction.RequesterPeerId,
             OrbReleaseApproval.SuccessResult(transaction.Request));
@@ -1293,6 +1358,15 @@ internal static partial class TamingOrbSystem
             foreach (string transactionId in expiredCapture)
             {
                 ServerCaptureTransaction transaction = ServerCaptureTransactions[transactionId];
+                if (transaction.Phase != OrbCaptureServerPhase.Completed)
+                {
+                    OrbCaptureResult cancelled = new()
+                    {
+                        TransactionId = transactionId, TargetId = transaction.Request.TargetId,
+                        ExpectedPrefab = transaction.Request.ExpectedPrefab
+                    };
+                    if (!PersistCapture(transaction, TamingOrbJournal.CompletedFailure, cancelled)) continue;
+                }
                 ReleaseCaptureLock(transaction);
                 ServerCaptureTransactions.Remove(transactionId);
             }
@@ -1301,6 +1375,7 @@ internal static partial class TamingOrbSystem
         List<string>? expiredRelease = null;
         foreach (KeyValuePair<string, ServerReleaseTransaction> entry in ServerReleaseTransactions)
         {
+            if (entry.Value.Result == null) continue;
             long retention = entry.Value.Result != null
                 ? OrbCompletedRetentionTicks
                 : OrbPendingRetentionTicks;
@@ -1418,19 +1493,12 @@ internal static partial class TamingOrbSystem
     private sealed class ClientCaptureTransaction
     {
         public OrbCaptureRequest Request { get; init; } = null!;
-        public ItemDrop.ItemData Item { get; init; } = null!;
+        public ItemDrop.ItemData Item { get; set; } = null!;
         public OrbCapturePrepared? Prepared { get; set; }
         public OrbCaptureClientPhase Phase { get; set; }
         public bool DelayElapsed { get; set; }
-        public bool ItemStateStaged { get; set; }
         public float StartedRealtime { get; init; }
         public float LastSentRealtime { get; set; }
-        public int PreviousStack { get; set; }
-        public int PreviousVariant { get; set; }
-        public bool HadPayload { get; set; }
-        public string? PreviousPayload { get; set; }
-        public bool HadCreatureManagerState { get; set; }
-        public string? PreviousCreatureManagerState { get; set; }
     }
 
     private sealed class ServerCaptureTransaction
@@ -1444,6 +1512,7 @@ internal static partial class TamingOrbSystem
         public OrbCaptureServerPhase Phase { get; set; }
         public OrbCapturePrepared? Prepared { get; set; }
         public OrbCaptureResult? Result { get; set; }
+        public OrbCaptureResult? PendingResult { get; set; }
         public long UpdatedAtTicks { get; set; }
     }
 
@@ -1456,7 +1525,7 @@ internal static partial class TamingOrbSystem
     private sealed class ClientReleaseTransaction
     {
         public OrbReleaseRequest Request { get; init; } = null!;
-        public ItemDrop.ItemData Item { get; init; } = null!;
+        public ItemDrop.ItemData Item { get; set; } = null!;
         public CapturedTamePayload Payload { get; init; } = null!;
         public GameObject CreaturePrefab { get; init; } = null!;
         public bool Approved { get; set; }

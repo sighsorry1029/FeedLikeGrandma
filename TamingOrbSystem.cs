@@ -24,7 +24,6 @@ internal static partial class TamingOrbSystem
     private const float ReleaseFallbackAimDistance = 1f;
     private const float ReleaseUpOffset = 1f;
     private static readonly Color TamingOrbGreen = new(0.18f, 0.72f, 0.28f, 1f);
-    private static readonly HashSet<ItemDrop.ItemData> PendingItems = new();
     private static readonly HashSet<ItemDrop.ItemData.SharedData> NonTamingOrbSharedData = new();
     private static readonly int OdinHorseHaveArmorHash = OdinHorseHaveArmorKey.GetStableHashCode();
     private static readonly int OdinHorseSetArmorRpcHash = "SetArmor".GetStableHashCode();
@@ -62,7 +61,6 @@ internal static partial class TamingOrbSystem
     internal static void Shutdown()
     {
         ShutdownOrbTransactions();
-        PendingItems.Clear();
         ShutdownIconPipeline();
         NonTamingOrbSharedData.Clear();
         _tamingOrbSharedData = null;
@@ -133,6 +131,8 @@ internal static partial class TamingOrbSystem
             return true;
         }
 
+        if (TryHandlePendingOrb(player, item)) return true;
+
         if (!IsEnabled())
         {
             FeedLocalization.Message(player, "$flg_taming_orb_disabled");
@@ -162,6 +162,8 @@ internal static partial class TamingOrbSystem
         {
             return false;
         }
+
+        if (TryHandlePendingOrb(player, item)) return true;
 
         if (!IsEnabled())
         {
@@ -193,6 +195,9 @@ internal static partial class TamingOrbSystem
         {
             return;
         }
+
+        if (HasPendingOrbItem(item))
+            tooltip += "\n\n" + FeedLocalization.Text("$flg_taming_orb_recovery_hint");
 
         if (TryReadPayload(item, out CapturedTamePayload? payload))
         {
@@ -231,7 +236,7 @@ internal static partial class TamingOrbSystem
 
     private static bool TryCapture(Player player, Character character, ItemDrop.ItemData item)
     {
-        if (PendingItems.Contains(item))
+        if (HasPendingOrbItem(item))
         {
             FeedLocalization.Message(player, "$flg_taming_orb_pending");
             return true;
@@ -266,14 +271,11 @@ internal static partial class TamingOrbSystem
         }
 
         PlayActionEffect(character.GetCenterPoint(), ((Component)character).transform.rotation);
-        PendingItems.Add(item);
         FeedLocalization.Message(player, "$flg_taming_orb_capturing", character.GetHoverName());
         if (BeginNetworkCapture(player, item, nview.GetZDO().m_uid, creaturePrefabName, ActionDelay))
         {
             return true;
         }
-
-        PendingItems.Remove(item);
         return false;
     }
 
@@ -305,7 +307,7 @@ internal static partial class TamingOrbSystem
             return false;
         }
 
-        if (PendingItems.Contains(item))
+        if (HasPendingOrbItem(item))
         {
             FeedLocalization.Message(player, "$flg_taming_orb_pending");
             return true;
@@ -331,7 +333,6 @@ internal static partial class TamingOrbSystem
             ? storedCreatureManagerState
             : string.Empty;
         PlayActionEffect(spawnPosition, spawnRotation);
-        PendingItems.Add(item);
         FeedLocalization.Message(player, "$flg_taming_orb_releasing", GetPayloadDisplayName(payload));
         if (BeginNetworkRelease(
             player,
@@ -345,8 +346,6 @@ internal static partial class TamingOrbSystem
         {
             return true;
         }
-
-        PendingItems.Remove(item);
         return false;
     }
 
@@ -383,7 +382,7 @@ internal static partial class TamingOrbSystem
             Health = Mathf.Max(1f, character.GetHealth()),
             MaxHealth = Mathf.Max(1f, character.GetMaxHealth()),
             HasSaddle = tameable != null && tameable.HaveSaddle(),
-            Inventory = zdo.GetString(ZDOVars.s_items, string.Empty),
+            Inventory = CaptureInventoryData(zdo),
             LastFedAgeTicks = lastFedTicks > 0L ? Math.Max(0L, nowTicks - lastFedTicks) : 0L,
             SpawnAgeTicks = spawnTicks > 0L ? Math.Max(0L, nowTicks - spawnTicks) : 0L,
             StarProgress = Mathf.Max(0f, zdo.GetFloat(FeedSystem.StarProgressHash, 0f)),
@@ -398,7 +397,19 @@ internal static partial class TamingOrbSystem
         };
     }
 
-    private static void RestorePayload(CapturedTamePayload payload, Character character, Tameable? tameable, ZNetView nview)
+    private static string CaptureInventoryData(ZDO zdo)
+    {
+        byte[]? inventory = zdo.GetByteArray(ZDOVars.s_items);
+        if (inventory == null && !string.IsNullOrEmpty(zdo.GetString(ZDOVars.s_items, string.Empty)))
+        {
+            // Do not discard inventory written by an unported mod or migrate its format here.
+            throw new InvalidOperationException("Creature inventory is not stored in the Valheim 1.0 byte-array format.");
+        }
+
+        return inventory == null ? string.Empty : Convert.ToBase64String(inventory);
+    }
+
+    private static void RestorePayload(CapturedTamePayload payload, byte[] inventory, Character character, Tameable? tameable, ZNetView nview)
     {
         ZDO zdo = nview.GetZDO();
         long nowTicks = ZNet.instance.GetTime().Ticks;
@@ -408,9 +419,9 @@ internal static partial class TamingOrbSystem
             zdo.Set(CllcEffectKey, payload.CllcEffect);
         }
 
-        if (!string.IsNullOrEmpty(payload.Inventory))
+        if (inventory.Length > 0)
         {
-            zdo.Set(ZDOVars.s_items, payload.Inventory);
+            zdo.Set(ZDOVars.s_items, inventory);
         }
 
         if (payload.LastFedAgeTicks > 0L)
@@ -464,7 +475,7 @@ internal static partial class TamingOrbSystem
 
     private static void GetReleaseTransform(Player player, out Vector3 position, out Quaternion rotation)
     {
-        Camera? camera = (object?)GameCamera.instance != null ? GameCamera.instance.m_camera : null;
+        Camera? camera = (object?)GameCamera.instance != null ? GameCamera.instance.GameCameraComponent() : null;
         Transform aimTransform = (object?)camera != null ? camera.transform : player.transform;
         Vector3 aimForward = aimTransform.forward;
         Vector3 rayOrigin = player.GetEyePoint();
@@ -524,7 +535,7 @@ internal static partial class TamingOrbSystem
         }
 
         zdo.Set(OdinHorseHaveArmorHash, true);
-        if (nview.m_functions != null && nview.m_functions.ContainsKey(OdinHorseSetArmorRpcHash))
+        if (nview.RpcHandlers() != null && nview.RpcHandlers().Contains(OdinHorseSetArmorRpcHash))
         {
             try
             {
@@ -758,19 +769,19 @@ internal static partial class TamingOrbSystem
             objectDb.m_items.Add(prefab);
         }
 
-        if (!objectDb.m_itemByHash.ContainsKey(hash))
+        if (!objectDb.ItemHashes().ContainsKey(hash))
         {
-            objectDb.m_itemByHash.Add(hash, prefab);
+            objectDb.ItemHashes().Add(hash, prefab);
         }
-        else if (objectDb.m_itemByHash[hash] == null || objectDb.m_itemByHash[hash].name == PrefabName)
+        else if (objectDb.ItemHashes()[hash] == null || objectDb.ItemHashes()[hash].name == PrefabName)
         {
-            objectDb.m_itemByHash[hash] = prefab;
+            objectDb.ItemHashes()[hash] = prefab;
         }
 
         ItemDrop? itemDrop = prefab.GetComponent<ItemDrop>();
         if ((object?)itemDrop != null)
         {
-            objectDb.m_itemByData[itemDrop.m_itemData.m_shared] = prefab;
+            objectDb.ItemDataPrefabs()[itemDrop.m_itemData.m_shared] = prefab;
         }
     }
 
@@ -789,13 +800,13 @@ internal static partial class TamingOrbSystem
             zNetScene.m_nonNetViewPrefabs.Add(prefab);
         }
 
-        if (!zNetScene.m_namedPrefabs.ContainsKey(hash))
+        if (!zNetScene.NamedPrefabs().ContainsKey(hash))
         {
-            zNetScene.m_namedPrefabs.Add(hash, prefab);
+            zNetScene.NamedPrefabs().Add(hash, prefab);
         }
-        else if (zNetScene.m_namedPrefabs[hash] == null || zNetScene.m_namedPrefabs[hash].name == PrefabName)
+        else if (zNetScene.NamedPrefabs()[hash] == null || zNetScene.NamedPrefabs()[hash].name == PrefabName)
         {
-            zNetScene.m_namedPrefabs[hash] = prefab;
+            zNetScene.NamedPrefabs()[hash] = prefab;
         }
     }
 
@@ -905,8 +916,8 @@ internal static partial class TamingOrbSystem
         return ZNetScene.instance != null &&
                ZNetScene.instance.m_prefabs != null &&
                ZNetScene.instance.m_prefabs.Count > 0 &&
-               ZNetScene.instance.m_namedPrefabs != null &&
-               ZNetScene.instance.m_namedPrefabs.Count > 0;
+               ZNetScene.instance.NamedPrefabs() != null &&
+               ZNetScene.instance.NamedPrefabs().Count > 0;
     }
 
     private static bool IsTamingOrb(ItemDrop.ItemData item)
@@ -955,7 +966,7 @@ internal static partial class TamingOrbSystem
     private static GameObject? FindSpawnableItemPrefab(ObjectDB objectDb, string prefabName)
     {
         if ((object?)ZNetScene.instance != null &&
-            ZNetScene.instance.m_namedPrefabs.TryGetValue(prefabName.GetStableHashCode(), out GameObject scenePrefab) &&
+            ZNetScene.instance.NamedPrefabs().TryGetValue(prefabName.GetStableHashCode(), out GameObject scenePrefab) &&
             (object?)scenePrefab != null &&
             HasSpawnableItemShape(scenePrefab))
         {
@@ -976,7 +987,7 @@ internal static partial class TamingOrbSystem
         if ((object?)objectDb != null)
         {
             int hash = prefabName.GetStableHashCode();
-            if (objectDb.m_itemByHash.TryGetValue(hash, out GameObject byHash) && (object?)byHash != null)
+            if (objectDb.ItemHashes().TryGetValue(hash, out GameObject byHash) && (object?)byHash != null)
             {
                 return byHash;
             }
@@ -995,7 +1006,7 @@ internal static partial class TamingOrbSystem
         }
 
         if ((object?)ZNetScene.instance != null &&
-            ZNetScene.instance.m_namedPrefabs.TryGetValue(prefabName.GetStableHashCode(), out GameObject scenePrefab) &&
+            ZNetScene.instance.NamedPrefabs().TryGetValue(prefabName.GetStableHashCode(), out GameObject scenePrefab) &&
             (object?)scenePrefab != null)
         {
             return scenePrefab;
@@ -1148,6 +1159,11 @@ internal static partial class TamingOrbSystem
         public float MaxHealth { get; init; }
         public bool HasSaddle { get; init; }
         public string Inventory { get; init; } = string.Empty;
+
+        // The v3 envelope continues to store base64; only the game's ZDO storage type changed.
+        public byte[] DecodeInventory() => string.IsNullOrEmpty(Inventory)
+            ? Array.Empty<byte>()
+            : Convert.FromBase64String(Inventory);
         public long LastFedAgeTicks { get; init; }
         public long SpawnAgeTicks { get; init; }
         public float StarProgress { get; init; }

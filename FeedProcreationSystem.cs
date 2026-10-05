@@ -65,44 +65,44 @@ internal static class FeedProcreationSystem
         }
 
         if ((object?)procreation == null ||
-            (object?)procreation.m_nview == null ||
-            !procreation.m_nview.IsValid() ||
-            !procreation.m_nview.IsOwner() ||
-            (object?)procreation.m_tameable == null ||
-            !procreation.m_tameable.IsTamed() ||
+            (object?)procreation.NetworkView() == null ||
+            !procreation.NetworkView().IsValid() ||
+            !procreation.NetworkView().IsOwner() ||
+            (object?)procreation.TameableComponent() == null ||
+            !procreation.TameableComponent().IsTamed() ||
             procreation.IsPregnant())
         {
             return true;
         }
 
         if (!TryEnsureProcreationPrefabs(procreation) ||
-            (object?)procreation.m_myPrefab == null ||
-            (object?)procreation.m_offspringPrefab == null)
+            (object?)procreation.OwnPrefab() == null ||
+            (object?)procreation.OffspringPrefab() == null)
         {
             return true;
         }
 
         Vector3 center = ((Component)procreation).transform.position;
-        int adultCount = CountPrefabInstancesXZ(procreation.m_myPrefab, center, procreation.m_totalCheckRange);
-        int offspringCount = CountPrefabInstancesXZ(procreation.m_offspringPrefab, center, procreation.m_totalCheckRange);
+        int adultCount = CountPrefabInstancesXZ(procreation.OwnPrefab(), center, procreation.m_totalCheckRange);
+        int offspringCount = CountPrefabInstancesXZ(procreation.OffspringPrefab(), center, procreation.m_totalCheckRange);
         return adultCount + offspringCount < procreation.m_maxCreatures;
     }
 
     private static bool TryEnsureProcreationPrefabs(Procreation procreation)
     {
-        if ((object?)procreation.m_myPrefab != null && (object?)procreation.m_offspringPrefab != null)
+        if ((object?)procreation.OwnPrefab() != null && (object?)procreation.OffspringPrefab() != null)
         {
             return true;
         }
 
         if ((object?)ZNetScene.instance == null ||
-            (object?)procreation.m_nview == null ||
-            !procreation.m_nview.IsValid())
+            (object?)procreation.NetworkView() == null ||
+            !procreation.NetworkView().IsValid())
         {
             return false;
         }
 
-        if ((object?)procreation.m_offspringPrefab == null)
+        if ((object?)procreation.OffspringPrefab() == null)
         {
             if ((object?)procreation.m_offspring == null)
             {
@@ -110,16 +110,16 @@ internal static class FeedProcreationSystem
             }
 
             string prefabName = Utils.GetPrefabName(procreation.m_offspring);
-            procreation.m_offspringPrefab = ZNetScene.instance.GetPrefab(prefabName);
+            procreation.OffspringPrefab() = ZNetScene.instance.GetPrefab(prefabName);
         }
 
-        if ((object?)procreation.m_myPrefab == null)
+        if ((object?)procreation.OwnPrefab() == null)
         {
-            int prefabHash = procreation.m_nview.GetZDO().GetPrefab();
-            procreation.m_myPrefab = ZNetScene.instance.GetPrefab(prefabHash);
+            int prefabHash = procreation.NetworkView().GetZDO().GetPrefab();
+            procreation.OwnPrefab() = ZNetScene.instance.GetPrefab(prefabHash);
         }
 
-        return (object?)procreation.m_myPrefab != null && (object?)procreation.m_offspringPrefab != null;
+        return (object?)procreation.OwnPrefab() != null && (object?)procreation.OffspringPrefab() != null;
     }
 
     private static int CountPrefabInstancesXZ(GameObject prefab, Vector3 center, float maxRange)
@@ -159,9 +159,9 @@ internal static class FeedProcreationSystem
         }
 
         HashSet<ZNetView> instances = new();
-        if ((object?)ZNetScene.instance != null && ZNetScene.instance.m_instances != null)
+        if ((object?)ZNetScene.instance != null && ZNetScene.instance.Instances() != null)
         {
-            foreach (ZNetView instance in ZNetScene.instance.m_instances.Values)
+            foreach (ZNetView instance in ZNetScene.instance.Instances().Values)
             {
                 if (IsCachedInstanceValid(instance, prefabHash))
                 {

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.1.4
+
+- Fixed Taming Orb transaction tracking across inventory item copies and transfers. Successful release updates the current matching Orb item, clearing its creature data and icon before allowing another capture.
+- Added persistent pending Orb state and per-world server transaction receipts. Pending Orbs can reconcile confirmed outcomes when used again; uncertain capture or release outcomes stay blocked instead of blindly retrying creature creation or restoring a filled Orb.
+- Verified releases using stable transaction markers rather than the creature's current position, and delayed capture confirmation until the server observes the target's deletion. Hardened duplicate, late-reply, ownership-change, and reconnect handling.
+- Kept the existing v3 creature payload while moving Orb networking to protocol v2. Install 1.1.4 on the server and every client, and back up the Orb transaction journal together with the world. This does not repair duplicates created before the update or make separate world and character saves atomic.
+- Updated the BepInEx package dependency to 5.4.2351 and added managed Orb persistence and item-state regression checks.
+- Retained the previous local-cache horizontal breeding limit. The experimental server population query is archived in the source repository and is not included in this release; the known unloaded-zone boundary limitation remains.
+
+## 1.1.3
+
+- Updated FeedLikeGrandma for Valheim 1.0.7 using the original client and dedicated-server game assemblies instead of stale publicized references.
+- Updated the embedded ServerSync baseline for Valheim 1.0.7 while preserving configuration keys, locking behavior, RPC identifiers, and wire formats.
+- Updated Harmony targets for the six-argument item tooltip and the new `BiomeSector` input used when a player discovers a biome.
+- Preserved creature inventory data in Taming Orbs using Valheim 1.0's byte-array ZDO storage. Invalid or obsolete string-only inventory data is rejected before capture or spawning to prevent item loss or duplication.
+- Replaced direct access to non-public game members with public accessors where equivalent and cached Harmony accessors where necessary.
+- Fixed the localization startup postfix target while retaining the existing localization helper API.
+- Added client and dedicated-server API/IL checks and expanded Orb regression coverage for inventory byte preservation and malformed payload rejection.
+
 ## 1.1.2
 
 - Prevented damaged or unsupported Taming Orb data from being overwritten by a new capture. Capture failures now restore item state only after the transaction has staged its own changes.

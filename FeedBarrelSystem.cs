@@ -184,8 +184,8 @@ internal static class FeedBarrelSystem
             return;
         }
 
-        inventory.m_width = columns;
-        inventory.m_height = rows;
+        inventory.InventoryWidth() = columns;
+        inventory.InventoryHeight() = rows;
     }
 
     private static void ApplyConfiguredMaterial(GameObject prefab, Piece piece)
@@ -240,13 +240,13 @@ internal static class FeedBarrelSystem
             zNetScene.m_nonNetViewPrefabs.Add(prefab);
         }
 
-        if (!zNetScene.m_namedPrefabs.ContainsKey(hash))
+        if (!zNetScene.NamedPrefabs().ContainsKey(hash))
         {
-            zNetScene.m_namedPrefabs.Add(hash, prefab);
+            zNetScene.NamedPrefabs().Add(hash, prefab);
         }
-        else if (zNetScene.m_namedPrefabs[hash] == null || zNetScene.m_namedPrefabs[hash].name == PrefabName)
+        else if (zNetScene.NamedPrefabs()[hash] == null || zNetScene.NamedPrefabs()[hash].name == PrefabName)
         {
-            zNetScene.m_namedPrefabs[hash] = prefab;
+            zNetScene.NamedPrefabs()[hash] = prefab;
         }
     }
 
@@ -278,12 +278,12 @@ internal static class FeedBarrelSystem
 
     private static void RefreshLocalBuildTable(PieceTable pieceTable)
     {
-        if ((object?)Player.m_localPlayer == null || (object?)Player.m_localPlayer.m_buildPieces == null)
+        if ((object?)Player.m_localPlayer == null || (object?)Player.m_localPlayer.GetBuildTool() == null)
         {
             return;
         }
 
-        if (Player.m_localPlayer.m_buildPieces == pieceTable)
+        if (Player.m_localPlayer.GetBuildTool() == pieceTable)
         {
             ((Humanoid)Player.m_localPlayer).SetPlaceMode(pieceTable);
         }
@@ -339,7 +339,7 @@ internal static class FeedBarrelSystem
         }
 
         int hash = itemName.GetStableHashCode();
-        return objectDb.m_itemByHash.TryGetValue(hash, out GameObject hashedPrefab) ? hashedPrefab : null;
+        return objectDb.ItemHashes().TryGetValue(hash, out GameObject hashedPrefab) ? hashedPrefab : null;
     }
 
     private static GameObject? FindScenePrefab(string prefabName)
@@ -356,7 +356,7 @@ internal static class FeedBarrelSystem
         }
 
         int hash = prefabName.GetStableHashCode();
-        return ZNetScene.instance.m_namedPrefabs.TryGetValue(hash, out GameObject hashedPrefab) ? hashedPrefab : null;
+        return ZNetScene.instance.NamedPrefabs().TryGetValue(hash, out GameObject hashedPrefab) ? hashedPrefab : null;
     }
 
     private static void StoreOriginalIcon(Piece piece)

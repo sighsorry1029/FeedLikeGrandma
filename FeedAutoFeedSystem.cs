@@ -167,7 +167,7 @@ internal static class FeedAutoFeedSystem
     {
         droppedItem = null;
         Inventory? inventory = container.GetInventory();
-        ZNetView? containerView = container.m_nview;
+        ZNetView? containerView = container.NetworkView();
         if (inventory == null || containerView == null || !containerView.IsValid())
         {
             return false;
@@ -203,8 +203,8 @@ internal static class FeedAutoFeedSystem
         out Vector3 dropPosition)
     {
         Vector3 center = GetContainerCenter(container);
-        Vector3 closestPoint = container.m_piece != null
-            ? container.m_piece.FindClosestPoint(animalPosition)
+        Vector3 closestPoint = container.ContainerPiece() != null
+            ? container.ContainerPiece().FindClosestPoint(animalPosition)
             : center;
 
         Vector3 preferredDirection = HorizontalNormalized(animalPosition - closestPoint);
@@ -249,9 +249,9 @@ internal static class FeedAutoFeedSystem
 
     private static Vector3 GetContainerCenter(Container container)
     {
-        if (container.m_piece != null)
+        if (container.ContainerPiece() != null)
         {
-            return container.m_piece.GetCenter();
+            return container.ContainerPiece().GetCenter();
         }
 
         return ((Component)container).transform.position;
@@ -307,10 +307,10 @@ internal static class FeedAutoFeedSystem
             return false;
         }
 
-        ZNetView? nview = container!.m_nview;
+        ZNetView? nview = container!.NetworkView();
         if (nview == null ||
             !nview.IsValid() ||
-            container.GetInventory() == null)
+            container!.GetInventory() == null)
         {
             return false;
         }

@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace FeedLikeGrandma;
 
-[HarmonyPatch(typeof(ZNet), nameof(ZNet.Awake))]
+[HarmonyPatch(typeof(ZNet), "Awake")]
 internal static class ZNetAwakePatch
 {
     private static void Postfix()
@@ -17,7 +17,16 @@ internal static class ZNetAwakePatch
     }
 }
 
-[HarmonyPatch(typeof(ObjectDB), nameof(ObjectDB.Awake))]
+[HarmonyPatch(typeof(ZNet), "OnDestroy")]
+internal static class OrbZNetDestroyPatch
+{
+    private static void Prefix(ZNet __instance)
+    {
+        if (ZNet.instance == __instance) TamingOrbSystem.EndNetworkSession();
+    }
+}
+
+[HarmonyPatch(typeof(ObjectDB), "Awake")]
 internal static class ObjectDbAwakePatch
 {
     private static void Postfix(ObjectDB __instance)
@@ -41,7 +50,7 @@ internal static class ObjectDbCopyPatch
     }
 }
 
-[HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
+[HarmonyPatch(typeof(ZNetScene), "Awake")]
 internal static class ZNetSceneAwakePatch
 {
     private static void Postfix()
@@ -53,7 +62,7 @@ internal static class ZNetSceneAwakePatch
     }
 }
 
-[HarmonyPatch(typeof(ZNetView), nameof(ZNetView.Awake))]
+[HarmonyPatch(typeof(ZNetView), "Awake")]
 internal static class ZNetViewAwakePatch
 {
     private static void Postfix(ZNetView __instance)
@@ -62,7 +71,7 @@ internal static class ZNetViewAwakePatch
     }
 }
 
-[HarmonyPatch(typeof(ZNetView), nameof(ZNetView.OnDestroy))]
+[HarmonyPatch(typeof(ZNetView), "OnDestroy")]
 internal static class ZNetViewOnDestroyPatch
 {
     private static void Prefix(ZNetView __instance)
@@ -71,7 +80,7 @@ internal static class ZNetViewOnDestroyPatch
     }
 }
 
-[HarmonyPatch(typeof(Player), nameof(Player.Awake))]
+[HarmonyPatch(typeof(Player), "Awake")]
 internal static class PlayerAwakePatch
 {
     private static void Postfix(Player __instance)
@@ -82,7 +91,7 @@ internal static class PlayerAwakePatch
     }
 }
 
-[HarmonyPatch(typeof(Container), nameof(Container.Awake))]
+[HarmonyPatch(typeof(Container), "Awake")]
 internal static class ContainerAwakePatch
 {
     private static void Postfix(Container __instance)
@@ -121,7 +130,7 @@ internal static class TameableUseItemPatch
     }
 }
 
-[HarmonyPatch(typeof(MonsterAI), nameof(MonsterAI.FindClosestConsumableItem))]
+[HarmonyPatch(typeof(MonsterAI), "FindClosestConsumableItem")]
 internal static class MonsterAIFindClosestConsumableItemPatch
 {
     private static void Postfix(MonsterAI __instance, float maxRange, ref ItemDrop __result)
@@ -139,7 +148,7 @@ internal static class MonsterAIFindClosestConsumableItemPatch
     }
 }
 
-[HarmonyPatch(typeof(Tameable), nameof(Tameable.OnConsumedItem))]
+[HarmonyPatch(typeof(Tameable), "OnConsumedItem")]
 internal static class TameableOnConsumedItemPatch
 {
     private struct AutomaticFeedState
@@ -177,9 +186,9 @@ internal static class TameableOnConsumedItemPatch
 
         Character? character = ((Component)__instance).GetComponent<Character>();
         if ((object?)character == null ||
-            (object?)character.m_nview == null ||
-            !character.m_nview.IsValid() ||
-            !character.m_nview.IsOwner() ||
+            (object?)character.NetworkView() == null ||
+            !character.NetworkView().IsValid() ||
+            !character.NetworkView().IsOwner() ||
             character.IsDead())
         {
             return;
@@ -189,7 +198,7 @@ internal static class TameableOnConsumedItemPatch
     }
 }
 
-[HarmonyPatch(typeof(MonsterAI), nameof(MonsterAI.CanConsume))]
+[HarmonyPatch(typeof(MonsterAI), "CanConsume")]
 internal static class MonsterAICanConsumePatch
 {
     private static bool Prefix(MonsterAI __instance, ItemDrop.ItemData item, ref bool __result)
@@ -239,7 +248,8 @@ internal static class PlayerUseHotbarItemPatch
     typeof(int),
     typeof(bool),
     typeof(float),
-    typeof(int)
+    typeof(int),
+    typeof(bool)
 })]
 internal static class ItemDataGetTooltipPatch
 {
@@ -249,7 +259,7 @@ internal static class ItemDataGetTooltipPatch
     }
 }
 
-[HarmonyPatch(typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.GetStatusEffectTooltip))]
+[HarmonyPatch(typeof(ItemDrop.ItemData), "GetStatusEffectTooltip")]
 internal static class ItemDataGetStatusEffectTooltipPatch
 {
     private static void Postfix(ItemDrop.ItemData __instance, ref string __result)
@@ -365,18 +375,24 @@ internal static class ItemDataGetIconPatch
     }
 }
 
-[HarmonyPatch(typeof(HotkeyBar), nameof(HotkeyBar.UpdateIcons))]
+[HarmonyPatch(typeof(HotkeyBar), "UpdateIcons")]
 internal static class HotkeyBarUpdateIconsPatch
 {
+    private static readonly Type ElementType = AccessTools.Inner(typeof(HotkeyBar), "ElementData");
+    private static readonly AccessTools.FieldRef<object, UnityEngine.UI.Image> ElementIcon =
+        AccessTools.FieldRefAccess<UnityEngine.UI.Image>(ElementType, "m_icon");
+    private static readonly AccessTools.FieldRef<object, bool> ElementUsed =
+        AccessTools.FieldRefAccess<bool>(ElementType, "m_used");
+
     [HarmonyPriority(Priority.Last)]
     private static void Postfix(HotkeyBar __instance)
     {
-        if (__instance.m_items == null || __instance.m_elements == null)
+        if (__instance.HotbarItems() == null || __instance.HotbarElements() == null)
         {
             return;
         }
 
-        foreach (ItemDrop.ItemData item in __instance.m_items)
+        foreach (ItemDrop.ItemData item in __instance.HotbarItems())
         {
             if ((object?)item == null)
             {
@@ -385,17 +401,18 @@ internal static class HotkeyBarUpdateIconsPatch
 
             int elementIndex = item.m_gridPos.x;
             if (elementIndex < 0 ||
-                elementIndex >= __instance.m_elements.Count ||
+                elementIndex >= __instance.HotbarElements().Count ||
                 !TamingOrbSystem.TryGetIcon(item, out Sprite? icon) ||
                 (object?)icon == null)
             {
                 continue;
             }
 
-            HotkeyBar.ElementData element = __instance.m_elements[elementIndex];
-            if (element?.m_icon != null && element.m_used)
+            object element = __instance.HotbarElements()[elementIndex];
+            UnityEngine.UI.Image? elementIcon = element == null ? null : ElementIcon(element);
+            if (element != null && elementIcon != null && ElementUsed(element))
             {
-                element.m_icon.sprite = icon;
+                elementIcon.sprite = icon;
             }
         }
     }
@@ -437,7 +454,7 @@ internal static class EggGrowHoverTextPatch
     }
 }
 
-[HarmonyPatch(typeof(EnemyHud), nameof(EnemyHud.TestShow))]
+[HarmonyPatch(typeof(EnemyHud), "TestShow")]
 internal static class EnemyHudTestShowPatch
 {
     private static bool Prefix(Character c, ref bool __result)
@@ -452,7 +469,7 @@ internal static class EnemyHudTestShowPatch
     }
 }
 
-[HarmonyPatch(typeof(ZSyncTransform), nameof(ZSyncTransform.Awake))]
+[HarmonyPatch(typeof(ZSyncTransform), "Awake")]
 internal static class ZSyncTransformAwakePatch
 {
     private static bool Prefix(ZSyncTransform __instance)
@@ -467,7 +484,7 @@ internal static class ZSyncTransformAwakePatch
     }
 }
 
-[HarmonyPatch(typeof(Floating), nameof(Floating.Awake))]
+[HarmonyPatch(typeof(Floating), "Awake")]
 internal static class FloatingAwakePatch
 {
     private static bool Prefix(Floating __instance)
@@ -482,7 +499,7 @@ internal static class FloatingAwakePatch
     }
 }
 
-[HarmonyPatch(typeof(Tameable), nameof(Tameable.DecreaseRemainingTime))]
+[HarmonyPatch(typeof(Tameable), "DecreaseRemainingTime")]
 internal static class TameableDecreaseRemainingTimePatch
 {
     private static void Prefix(Tameable __instance)
@@ -506,7 +523,7 @@ internal static class TameableIsHungryPatch
     }
 }
 
-[HarmonyPatch(typeof(Growup), nameof(Growup.GrowUpdate))]
+[HarmonyPatch(typeof(Growup), "GrowUpdate")]
 internal static class GrowupGrowUpdatePatch
 {
     private static bool Prefix(Growup __instance)
@@ -520,7 +537,7 @@ internal static class GrowupGrowUpdatePatch
     }
 }
 
-[HarmonyPatch(typeof(Procreation), nameof(Procreation.Procreate))]
+[HarmonyPatch(typeof(Procreation), "Procreate")]
 internal static class ProcreationProcreatePatch
 {
     private static bool Prefix(Procreation __instance)
@@ -529,7 +546,7 @@ internal static class ProcreationProcreatePatch
     }
 }
 
-[HarmonyPatch(typeof(Hud), nameof(Hud.UpdateCrosshair))]
+[HarmonyPatch(typeof(Hud), "UpdateCrosshair")]
 internal static class HudUpdateCrosshairPatch
 {
     private static void Postfix(Player player)

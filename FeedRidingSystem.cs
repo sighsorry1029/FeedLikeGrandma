@@ -54,7 +54,7 @@ internal static class FeedRidingSystem
         }
 
         _encumberedPlayerId = ((Object)player).GetInstanceID();
-        _encumberedCached = player.m_inventory.GetTotalWeight() > player.GetMaxCarryWeight();
+        _encumberedCached = player.GetInventory().GetTotalWeight() > player.GetMaxCarryWeight();
         _encumberedCacheValid = true;
     }
 
@@ -66,16 +66,16 @@ internal static class FeedRidingSystem
             return false;
         }
 
-        Sadle? saddle = character.m_baseAI?.m_tamable?.m_saddle;
+        Sadle? saddle = character.GetBaseAI()?.TameableComponent()?.m_saddle;
         return IsLocalRiderEncumbered(saddle);
     }
 
     internal static void ApplyStaminaCostMultiplier(Sadle saddle, ref float staminaCost)
     {
         if ((object?)saddle == null ||
-            (object?)saddle.m_nview == null ||
-            !saddle.m_nview.IsValid() ||
-            !saddle.m_nview.IsOwner())
+            (object?)saddle.NetworkView() == null ||
+            !saddle.NetworkView().IsValid() ||
+            !saddle.NetworkView().IsOwner())
         {
             return;
         }
@@ -122,7 +122,7 @@ internal static class FeedRidingSystem
         if (!updatedRiding ||
             FeedLikeGrandmaPlugin.EncumberedWalkStaminaDrain.Value != FeedLikeGrandmaPlugin.Toggle.On ||
             (object?)saddle == null ||
-            saddle.m_speed != Sadle.Speed.Walk ||
+            saddle.RidingSpeed() != 1 /* Sadle.Speed.Walk in 1.0.7 */ ||
             !IsLocalRiderEncumbered(saddle))
         {
             return;
@@ -145,7 +145,7 @@ internal static class FeedRidingSystem
     }
 }
 
-[HarmonyPatch(typeof(GameCamera), nameof(GameCamera.ApplyCameraTilt))]
+[HarmonyPatch(typeof(GameCamera), "ApplyCameraTilt")]
 internal static class GameCameraApplyCameraTiltPatch
 {
     private static bool Prefix(Player player)
@@ -154,7 +154,7 @@ internal static class GameCameraApplyCameraTiltPatch
     }
 }
 
-[HarmonyPatch(typeof(Sadle), nameof(Sadle.UseStamina))]
+[HarmonyPatch(typeof(Sadle), "UseStamina")]
 internal static class SaddleUseStaminaPatch
 {
     private static void Prefix(Sadle __instance, ref float v)
@@ -163,7 +163,7 @@ internal static class SaddleUseStaminaPatch
     }
 }
 
-[HarmonyPatch(typeof(Sadle), nameof(Sadle.UpdateStamina))]
+[HarmonyPatch(typeof(Sadle), "UpdateStamina")]
 internal static class SaddleUpdateStaminaPatch
 {
     private static void Prefix(Sadle __instance, ref FeedRidingSystem.StaminaRegenState __state)
@@ -202,7 +202,7 @@ internal static class CharacterIsEncumberedForMountPatch
     }
 }
 
-[HarmonyPatch(typeof(Player), nameof(Player.OnInventoryChanged))]
+[HarmonyPatch(typeof(Player), "OnInventoryChanged")]
 internal static class PlayerOnInventoryChangedEncumberedCachePatch
 {
     private static void Postfix(Player __instance)

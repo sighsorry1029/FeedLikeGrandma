@@ -225,7 +225,7 @@ internal static class FeedMonstrumCompatibility
             return false;
         }
 
-        saddle = player.m_doodadController as Sadle;
+        saddle = player.GetDoodadController() as Sadle;
         Component? controlled = saddle?.GetControlledComponent();
         if ((object?)controlled == null)
         {

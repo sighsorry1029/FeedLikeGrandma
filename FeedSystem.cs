@@ -880,15 +880,15 @@ internal static partial class FeedSystem
     {
         string sourceText = originalText ?? string.Empty;
         if ((object?)eggGrow == null ||
-            (object?)eggGrow.m_nview == null ||
-            !eggGrow.m_nview.IsValid() ||
-            (object?)eggGrow.m_item == null ||
-            eggGrow.m_item.m_itemData.m_stack > 1)
+            (object?)eggGrow.NetworkView() == null ||
+            !eggGrow.NetworkView().IsValid() ||
+            (object?)eggGrow.EggItem() == null ||
+            eggGrow.EggItem().m_itemData.m_stack > 1)
         {
             return sourceText;
         }
 
-        ZDO? zdo = eggGrow.m_nview.GetZDO();
+        ZDO? zdo = eggGrow.NetworkView().GetZDO();
         float growStart = zdo?.GetFloat(ZDOVars.s_growStart, 0f) ?? 0f;
         string line;
         if (growStart > 0f)
@@ -1199,13 +1199,13 @@ internal static partial class FeedSystem
 
     private static void TriggerConsumeAnimation(FeedTargetContext context)
     {
-        ZSyncAnimation? animator = context.BaseAI?.m_animator;
-        if ((object?)animator == null || (object?)animator.m_animator == null)
+        ZSyncAnimation? animator = context.BaseAI?.SyncedAnimator();
+        if ((object?)animator == null || (object?)animator.UnityAnimator() == null)
         {
             return;
         }
 
-        bool hasConsumeTrigger = animator.m_animator.parameters.Any(parameter =>
+        bool hasConsumeTrigger = animator.UnityAnimator().parameters.Any(parameter =>
             parameter.type == AnimatorControllerParameterType.Trigger &&
             parameter.name.Equals("consume", StringComparison.Ordinal));
         if (!hasConsumeTrigger)
@@ -1931,10 +1931,10 @@ internal static partial class FeedSystem
     {
         float elapsed = GetGrowthElapsedSeconds(growup, character, initializeIfMissing: true);
         long nowTicks = ZNet.instance.GetTime().Ticks;
-        long lastTicks = growup.m_nview.GetZDO().GetLong(GrowthLastEvalHash, nowTicks);
+        long lastTicks = growup.NetworkView().GetZDO().GetLong(GrowthLastEvalHash, nowTicks);
         if (lastTicks == 0L)
         {
-            growup.m_nview.GetZDO().Set(GrowthLastEvalHash, nowTicks);
+            growup.NetworkView().GetZDO().Set(GrowthLastEvalHash, nowTicks);
             return elapsed;
         }
 
@@ -1944,7 +1944,7 @@ internal static partial class FeedSystem
             return elapsed;
         }
 
-        growup.m_nview.GetZDO().Set(GrowthLastEvalHash, nowTicks);
+        growup.NetworkView().GetZDO().Set(GrowthLastEvalHash, nowTicks);
         if (!character.IsTamed())
         {
             return elapsed;
@@ -1961,7 +1961,7 @@ internal static partial class FeedSystem
 
     private static float GetGrowthElapsedSeconds(Growup growup, Character character, bool initializeIfMissing)
     {
-        ZDO zdo = growup.m_nview.GetZDO();
+        ZDO zdo = growup.NetworkView().GetZDO();
         if (zdo == null)
         {
             return 0f;
@@ -1998,8 +1998,8 @@ internal static partial class FeedSystem
 
     private static void SetGrowthElapsedSeconds(Growup growup, float value)
     {
-        growup.m_nview.GetZDO().Set(GrowthElapsedHash, Mathf.Max(0f, value));
-        growup.m_nview.GetZDO().Set(GrowthLastEvalHash, ZNet.instance.GetTime().Ticks);
+        growup.NetworkView().GetZDO().Set(GrowthElapsedHash, Mathf.Max(0f, value));
+        growup.NetworkView().GetZDO().Set(GrowthLastEvalHash, ZNet.instance.GetTime().Ticks);
     }
 
     private static void GrowNow(Growup growup, Character currentCharacter)
@@ -2022,7 +2022,7 @@ internal static partial class FeedSystem
             }
         }
 
-        growup.m_nview.Destroy();
+        growup.NetworkView().Destroy();
     }
 
     private static void SpawnTamedProgressionEffect(Transform target)
@@ -2078,8 +2078,8 @@ internal static partial class FeedSystem
         }
 
         Vector3 requesterEye = requester.GetEyePoint();
-        Vector3 targetPoint = (object?)target.m_collider != null && target.m_collider.enabled
-            ? target.m_collider.ClosestPoint(requesterEye)
+        Vector3 targetPoint = (object?)target.GetCollider() != null && target.GetCollider().enabled
+            ? target.GetCollider().ClosestPoint(requesterEye)
             : target.GetCenterPoint();
         float maxDistance = Mathf.Max(0f, requester.m_maxInteractDistance) + FeedRequestDistanceTolerance;
         return (targetPoint - requesterEye).sqrMagnitude <= maxDistance * maxDistance;

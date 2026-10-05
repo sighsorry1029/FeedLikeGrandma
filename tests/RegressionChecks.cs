@@ -23,13 +23,14 @@ internal static class RegressionChecks
 
         string assemblyPath = Path.GetFullPath(args[0]);
         string directory = Path.GetDirectoryName(assemblyPath);
-        // Publicized game assemblies retain their original assembly identity.
+        string[] searchDirectories = { directory };
+        // Never resolve publicized copies.
         AppDomain.CurrentDomain.AssemblyResolve += (_, eventArgs) =>
         {
             string name = new AssemblyName(eventArgs.Name).Name;
-            foreach (string suffix in new[] { ".dll", "_publicized.dll" })
+            foreach (string searchDirectory in searchDirectories)
             {
-                string path = Path.Combine(directory, name + suffix);
+                string path = Path.Combine(searchDirectory, name + ".dll");
                 if (File.Exists(path)) return Assembly.LoadFrom(path);
             }
             return null;
@@ -130,6 +131,23 @@ internal static class RegressionChecks
             Check(!(bool)deserialize.Invoke(null, new object[] { Convert.ToBase64String(bytes), null, false }),
                   "reject unsupported Orb version " + version);
         }
+
+        MethodInfo decodeInventory = payloadType.GetMethod("DecodeInventory");
+        payloadType.GetProperty("Inventory").SetValue(payload, "");
+        Check(((byte[])decodeInventory.Invoke(payload, null)).Length == 0, "empty Orb inventory remains empty");
+        byte[] inventory = { 109, 0, 0, 0, 0, 0, 0, 0, 0, 127, 255 };
+        payloadType.GetProperty("Inventory").SetValue(payload, Convert.ToBase64String(inventory));
+        Check(((byte[])decodeInventory.Invoke(payload, null)).SequenceEqual(inventory), "preserve opaque 1.0 inventory bytes");
+        arguments = new object[] { payloadType.GetMethod("Serialize").Invoke(payload, null), null, false };
+        Check((bool)deserialize.Invoke(null, arguments) &&
+              ((byte[])decodeInventory.Invoke(arguments[1], null)).SequenceEqual(inventory),
+              "inventory bytes survive v3 serialization round trip");
+        payloadType.GetProperty("Inventory").SetValue(payload, "damaged inventory!");
+        bool rejected = false;
+        try { decodeInventory.Invoke(payload, null); }
+        catch (TargetInvocationException error) { rejected = error.InnerException is FormatException; }
+        Check(rejected && (string)Get(payload, "Inventory") == "damaged inventory!",
+              "reject damaged inventory base64 without changing stored data");
     }
 
     private static Parsed Parse(string yaml)

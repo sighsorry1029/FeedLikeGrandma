@@ -318,7 +318,7 @@ internal static class FeedBetterRidingCompatibility
             return true;
         }
 
-        return (object?)character.m_baseAI != null &&
+        return (object?)character.GetBaseAI() != null &&
                humanoid.m_defaultItems != null &&
                humanoid.m_defaultItems.Length >= 2;
     }
@@ -330,7 +330,7 @@ internal static class FeedBetterRidingCompatibility
             return false;
         }
 
-        Sadle? saddle = player.m_doodadController as Sadle;
+        Sadle? saddle = player.GetDoodadController() as Sadle;
         Character? mount = saddle?.GetCharacter();
         return (object?)saddle != null && (IsInWater(player) || IsInWater(mount));
     }
@@ -343,13 +343,13 @@ internal static class FeedBetterRidingCompatibility
         }
 
         return character.InWater() ||
-               character.m_waterLevel > character.m_tarLevel &&
-               character.m_waterLevel - ((Component)character).transform.position.y > 0.05f;
+               character.WaterLevel() > character.TarLevel() &&
+               character.WaterLevel() - ((Component)character).transform.position.y > 0.05f;
     }
 
     private static void ResetPlayerDrawAttack(Player player)
     {
-        if (player.m_attackDrawTime <= 0f)
+        if (player.AttackDrawTime() <= 0f)
         {
             return;
         }
@@ -358,11 +358,11 @@ internal static class FeedBetterRidingCompatibility
         string? drawAnimationState = weapon?.m_shared.m_attack.m_drawAnimationState;
         if (!string.IsNullOrEmpty(drawAnimationState))
         {
-            player.m_zanim.SetBool(drawAnimationState, false);
-            player.m_zanim.SetFloat("drawpercent", 0f);
+            player.GetZAnim().SetBool(drawAnimationState, false);
+            player.GetZAnim().SetFloat("drawpercent", 0f);
         }
 
-        player.m_attackDrawTime = 0f;
+        player.AttackDrawTime() = 0f;
     }
 
     private static bool CanUseAttackStamina(Sadle? saddle, ResolvedMountStaminaValues mountStamina)
@@ -396,8 +396,8 @@ internal static class FeedBetterRidingCompatibility
     private static bool CanUseStamina(Sadle? saddle, float amount)
     {
         return (object?)saddle != null &&
-               (object?)saddle.m_nview != null &&
-               saddle.m_nview.IsValid() &&
+               (object?)saddle.NetworkView() != null &&
+               saddle.NetworkView().IsValid() &&
                saddle.GetStamina() >= amount;
     }
 
@@ -405,9 +405,9 @@ internal static class FeedBetterRidingCompatibility
     {
         if (amount <= 0f ||
             (object?)saddle == null ||
-            (object?)saddle.m_nview == null ||
-            !saddle.m_nview.IsValid() ||
-            !saddle.m_nview.IsOwner())
+            (object?)saddle.NetworkView() == null ||
+            !saddle.NetworkView().IsValid() ||
+            !saddle.NetworkView().IsOwner())
         {
             return;
         }
@@ -449,7 +449,7 @@ internal static class FeedBetterRidingCompatibility
 
         if (humanoid is Player rider && rider.IsRiding())
         {
-            saddle = rider.m_doodadController as Sadle;
+            saddle = rider.GetDoodadController() as Sadle;
             return (object?)saddle != null;
         }
 
@@ -459,7 +459,7 @@ internal static class FeedBetterRidingCompatibility
             return false;
         }
 
-        saddle = localPlayer.m_doodadController as Sadle;
+        saddle = localPlayer.GetDoodadController() as Sadle;
         Character? mount = saddle?.GetCharacter();
         if ((object?)mount == null || !ReferenceEquals(mount, humanoid))
         {
@@ -545,7 +545,7 @@ internal static class BetterRidingSuppressPlayerAttackHoldPatch
     }
 }
 
-[HarmonyPatch(typeof(Player), nameof(Player.PlayerAttackInput))]
+[HarmonyPatch(typeof(Player), "PlayerAttackInput")]
 internal static class BetterRidingSuppressPlayerAttackInputPatch
 {
     private static bool Prepare()

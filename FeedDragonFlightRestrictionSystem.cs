@@ -114,7 +114,7 @@ internal static class FeedDragonFlightRestrictionSystem
         Player? player = Player.m_localPlayer;
         if ((object?)player == null ||
             (object?)saddle == null ||
-            !ReferenceEquals(player.m_doodadController, saddle) ||
+            !ReferenceEquals(player.GetDoodadController(), saddle) ||
             !IsBetterRidingDragon(saddle))
         {
             return;
@@ -305,7 +305,7 @@ internal static class FeedDragonFlightRestrictionSystem
             return false;
         }
 
-        saddle = player.m_doodadController as Sadle;
+        saddle = player.GetDoodadController() as Sadle;
         if ((object?)saddle == null || !IsBetterRidingDragon(saddle))
         {
             return false;
@@ -839,7 +839,7 @@ internal static class SaddleApplyControlsDragonFlightRestrictionPatch
     }
 }
 
-[HarmonyPatch(typeof(Player), nameof(Player.AddKnownBiome))]
+[HarmonyPatch(typeof(Player), "AddKnownBiome", new[] { typeof(BiomeSector) })]
 internal static class PlayerAddKnownBiomeDragonFlightRestrictionPatch
 {
     private static bool Prepare()
@@ -847,9 +847,9 @@ internal static class PlayerAddKnownBiomeDragonFlightRestrictionPatch
         return FeedBetterRidingCompatibility.HasBetterRiding;
     }
 
-    private static void Postfix(Player __instance, Heightmap.Biome biome)
+    private static void Postfix(Player __instance, BiomeSector biome)
     {
-        FeedDragonFlightRestrictionSystem.OnBiomeChanged(__instance, biome);
+        FeedDragonFlightRestrictionSystem.OnBiomeChanged(__instance, biome.Biome);
     }
 }
 

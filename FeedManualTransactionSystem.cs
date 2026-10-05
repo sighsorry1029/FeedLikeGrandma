@@ -56,7 +56,7 @@ internal static partial class FeedSystem
         string name,
         Action<long, ZPackage> handler)
     {
-        if (!routedRpc.m_functions.ContainsKey(name.GetStableHashCode()))
+        if (!routedRpc.RpcHandlers().Contains(name.GetStableHashCode()))
         {
             routedRpc.Register(name, handler);
         }
@@ -869,7 +869,7 @@ internal static partial class FeedSystem
             return false;
         }
 
-        if (sender == ZRoutedRpc.instance.m_id)
+        if (sender == ZRoutedRpc.instance.PeerId())
         {
             Player? localPlayer = Player.m_localPlayer;
             return (object?)localPlayer != null && localPlayer.GetZDOID().Equals(playerId);
@@ -898,7 +898,7 @@ internal static partial class FeedSystem
         ZNetView? nview = targetObject?.GetComponent<ZNetView>();
         if ((object?)nview != null && nview.IsValid() && nview.IsOwner())
         {
-            ownerPeerId = ZRoutedRpc.instance.m_id;
+            ownerPeerId = ZRoutedRpc.instance.PeerId();
         }
 
         return ownerPeerId != 0L;

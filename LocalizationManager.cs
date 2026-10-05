@@ -1,4 +1,5 @@
-﻿using System;
+using FeedLikeGrandma;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -95,7 +96,7 @@ public class Localizer
             if (reference.TryGetTarget(out Localization localization))
             {
                 Dictionary<string, string> texts = loadedTexts[localizationLanguage.GetOrCreateValue(localization)];
-                if (!localization.m_translations.ContainsKey(key))
+                if (!localization.Translations().ContainsKey(key))
                 {
                     texts[key] = text;
                     localization.AddWord(key, text);
@@ -116,6 +117,7 @@ public class Localizer
     public static void Load() => _ = plugin;
 
     public static void LoadLocalizationLater(Localization __instance) => LoadLocalization(Localization.instance, __instance.GetSelectedLanguage());
+    private static void LoadStartupLocalization() => LoadLocalizationLater(Localization.instance);
     public static void SafeCallLocalizeComplete() => OnLocalizationComplete?.Invoke();
 
     private static void LoadLocalization(Localization __instance, string language)
@@ -196,8 +198,8 @@ public class Localizer
     {
         Harmony harmony = new("org.bepinex.helpers.LocalizationManager");
         harmony.Patch(AccessTools.DeclaredMethod(typeof(Localization), nameof(Localization.SetupLanguage)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalization))));
-        harmony.Patch(AccessTools.DeclaredMethod(typeof(FejdStartup), nameof(FejdStartup.SetupGui)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadLocalizationLater))));
-        harmony.Patch(AccessTools.DeclaredMethod(typeof(FejdStartup), nameof(FejdStartup.Start)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(SafeCallLocalizeComplete))));
+        harmony.Patch(AccessTools.DeclaredMethod(typeof(FejdStartup), "SetupGui"), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(LoadStartupLocalization))));
+        harmony.Patch(AccessTools.DeclaredMethod(typeof(FejdStartup), "Start"), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(Localizer), nameof(SafeCallLocalizeComplete))));
     }
 
     private static byte[]? LoadTranslationFromAssembly(string language)

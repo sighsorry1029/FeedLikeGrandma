@@ -2,6 +2,8 @@
 
 Feed creatures by hand to tame, grow, heal, and level them up. Capture and carry tames in Taming Orbs with creature icons, or automate feeding with Feed Barrels. Supports custom foods, modded creatures, stacked fed time, and riding improvements.
 
+The current source targets Valheim **1.0.7** and BepInExPack Valheim **5.4.2350**, using original game DLLs. See [compatibility notes](https://github.com/sighsorry1029/FeedLikeGrandma/blob/main/docs/Valheim-1.0.7.md) for changes and validation limits.
+
 ## Showcase
 
 ### Feed-driven progression
@@ -295,6 +297,10 @@ The orb preserves:
 - OdinHorse armor state when available
 
 A filled orb overlays the captured creature on the green orb icon. Rendered icons are cached under `FeedLikeGrandma/cache/icons/` and reused on later captures.
+
+Orb operations retain a saved pending state until the server confirms their result. Moving an orb between inventory slots does not lose this state. If a pending orb is dropped, transferred, or recovered after reconnecting, use it to check the saved result before attempting another capture or release. An uncertain result keeps the contents protected instead of spawning another creature.
+
+The server and participating clients must use the same patched build (Orb RPC protocol v2). The server stores operation receipts under `BepInEx/config/FeedLikeGrandma/orb-transactions/`, separately for each world. Keep these files with world backups; do not delete them to reset a pending orb. Recovery after a server restart requires matching world evidence. In particular, an unacknowledged capture across a server restart is kept pending when durable deletion cannot be proven. Already duplicated creatures and inconsistent orbs from earlier builds are not automatically repaired.
 
 Default recipe and station:
 
