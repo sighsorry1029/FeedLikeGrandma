@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.5
+
+- Fixed Feed Barrel food placement on raised building floors. Food candidates now use nearby terrain or building surfaces instead of being projected onto terrain underneath the structure.
+- Limited surface searches to 1 metre above or below the creature's feet, preserving the existing food-search range, path checks, and normal eating behavior. Unsupported points, steep or Rigidbody-backed surfaces, and the barrel itself are skipped before removing food; trigger volumes are ignored.
+- Added 40 managed regression checks for floor selection, roof and lower-floor separation, obstacles, and inventory preservation. Actual Unity physics, pathfinding, and multiplayer feeding still require in-game verification.
+
 ## 1.1.4
 
 - Fixed Taming Orb transaction tracking across inventory item copies and transfers. Successful release updates the current matching Orb item, clearing its creature data and icon before allowing another capture.

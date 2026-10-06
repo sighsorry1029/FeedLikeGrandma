@@ -264,6 +264,8 @@ This includes food consumed naturally from the ground. The Feed Barrel extends t
 
 This approach keeps the visible eating animation and normal pathfinding behavior. Place the barrel inside the creature's own food-search range and leave a clear walkable space around it. The barrel is ignored while open, when it contains no valid food, or when the creature is alerted.
 
+Food can be placed on terrain or building floors. Nearby drop points must have a solid surface within 1 metre above or below the creature's feet and pass its normal path check. Keep the barrel and animal near the same floor height; unsupported edges and larger height differences are skipped instead of dropping food onto distant terrain below.
+
 The Feed Barrel appears in the Hammer's Misc category. Its recipe, material, columns, and rows are configurable. The default inventory is 6 by 2 and the default material uses `ectoplasm_mat`.
 
 Default recipe:

@@ -36,6 +36,29 @@ Use a disposable world and character. Repeat the networking scenarios on a host 
 
 Do not interpret passing the console checks as proof of these runtime scenarios. In particular, the console runner does not measure allocations, validate RPC transport or execute optional mods.
 
+## Feed Barrel floor placement — 2026-10-06
+
+The barrel now probes the terrain/building surface within 1 m of the animal's foot height instead of projecting food candidates onto terrain beneath a structure. A single downward ray ignores triggers and rejects the barrel itself, moving bodies and steep first-hit surfaces; it does not search through them for another floor. The existing range and path checks run before any item is removed.
+
+```powershell
+dotnet build tests/FeedBarrelSurfaceChecks.csproj -c Debug
+./tests/bin/feed-barrel-surface/FeedBarrelSurfaceChecks.exe
+```
+
+These source-linked checks use a managed geometric raycast fixture and stub game dependencies. They test candidate selection and food-removal guards, not Unity collider behavior, generated NavMesh or multiplayer ownership.
+
+On 2026-10-06, the 40 surface/feeding checks and 37 existing YAML/Orb regression checks passed. The Debug mod and surface-check runner built with no warnings or errors. The final merged mod passed the original 1.0.16 client/server API checks (1,496 direct game references, 58 Harmony targets/arguments, 47 private bindings and 13 dynamic/reflection contracts), and the installed local game DLL matched the built DLL's SHA-256.
+
+Still verify in the game with a hungry, calm animal and a closed barrel containing valid food:
+
+1. Compare ordinary terrain, a low wooden floor, and an elevated stone floor. Food must appear above the chosen support and be consumed through the normal AI flow.
+2. Add an upper floor/roof and leave terrain far below. The food must remain near the animal's floor. An unsupported edge with no surface in the probe range must not reduce the barrel's stock.
+3. Compare nearby slopes/steps within 1 m of foot height with larger height differences. The latter are deliberately skipped; a valid path alone does not override the local surface requirement. Floors separated by less than 1 m still depend on the normal path check.
+4. Test blocked paths, narrow spaces, the barrel's own collider, and trigger volumes. Rejected candidates must not consume food. Check that normal dropped food still works.
+5. Repeat on a host and a dedicated server with two clients, including animal/barrel ownership on different peers. Count barrel stock and dropped/consumed food, and verify normal inventory access and hunger/alert restrictions.
+
+The Debug build, managed checks and original client/server API checks do not replace these runtime scenarios.
+
 ## Orb transaction patch — 2026-10-05
 
 Production changes preserve the v3 creature payload. The new `flg.tame.pending` item value follows vanilla ItemData copies; operations resolve the current item by OrbId and transaction ID. Old object-reference locks and the duplicate capture snapshot were removed. Missing or ambiguous item identities remain unresolved rather than modifying another item. A transferred orb reconciles on use in its original world.

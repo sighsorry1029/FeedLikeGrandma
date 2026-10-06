@@ -6,10 +6,13 @@ namespace FeedLikeGrandma;
 internal static class FeedAutoFeedSystem
 {
     private const float ContainerCleanupInterval = 5f;
+    private const float DropSurfaceHeightTolerance = 1f;
+    private const float MinimumDropSurfaceNormalY = 0.5f;
     private static readonly float[] DropPointAngles = { 0f, 45f, -45f, 90f, -90f, 135f, -135f, 180f };
 
     private static readonly List<Container> RegisteredFeedContainers = new();
     private static float _nextContainerCleanupTime;
+    private static int _dropSurfaceMask;
 
     internal static void Shutdown()
     {
@@ -214,7 +217,7 @@ internal static class FeedAutoFeedSystem
         }
 
         float radius = Mathf.Max(1.25f, monsterAI.m_consumeRange * 0.75f);
-        if (TryUseDropPoint(monsterAI, animalPosition, closestPoint + preferredDirection * radius, maxRange, out dropPosition))
+        if (TryUseDropPoint(monsterAI, container, animalPosition, closestPoint + preferredDirection * radius, maxRange, out dropPosition))
         {
             return true;
         }
@@ -223,7 +226,7 @@ internal static class FeedAutoFeedSystem
         foreach (float angle in DropPointAngles)
         {
             Vector3 direction = Quaternion.Euler(0f, angle, 0f) * preferredDirection;
-            if (TryUseDropPoint(monsterAI, animalPosition, center + direction * sampleRadius, maxRange, out dropPosition))
+            if (TryUseDropPoint(monsterAI, container, animalPosition, center + direction * sampleRadius, maxRange, out dropPosition))
             {
                 return true;
             }
@@ -233,13 +236,17 @@ internal static class FeedAutoFeedSystem
         return false;
     }
 
-    private static bool TryUseDropPoint(MonsterAI monsterAI, Vector3 animalPosition, Vector3 point, float maxRange, out Vector3 dropPosition)
+    private static bool TryUseDropPoint(MonsterAI monsterAI, Container container, Vector3 animalPosition, Vector3 point, float maxRange, out Vector3 dropPosition)
     {
-        point = SnapToGround(point);
+        dropPosition = Vector3.zero;
+        if (!TryGetDropSurface(container, animalPosition, point, out point))
+        {
+            return false;
+        }
+
         Vector3 offset = point - animalPosition;
         if (offset.sqrMagnitude > maxRange * maxRange || !monsterAI.HavePath(point))
         {
-            dropPosition = Vector3.zero;
             return false;
         }
 
@@ -263,14 +270,30 @@ internal static class FeedAutoFeedSystem
         return vector.sqrMagnitude > 0.0001f ? vector.normalized : Vector3.zero;
     }
 
-    private static Vector3 SnapToGround(Vector3 point)
+    private static bool TryGetDropSurface(Container container, Vector3 animalPosition, Vector3 point, out Vector3 surfacePoint)
     {
-        if (ZoneSystem.instance != null && ZoneSystem.instance.GetGroundHeight(point, out float height))
+        surfacePoint = Vector3.zero;
+        if (_dropSurfaceMask == 0)
         {
-            point.y = height;
+            _dropSurfaceMask = LayerMask.GetMask("Default", "static_solid", "Default_small", "piece", "terrain");
         }
 
-        return point;
+        // Keep the probe near the animal's feet: terrain-only height queries put food
+        // below raised floors, while a ray from high above can select an upper roof.
+        point.y = animalPosition.y + DropSurfaceHeightTolerance;
+        if (!Physics.Raycast(point, Vector3.down, out RaycastHit hit, DropSurfaceHeightTolerance * 2f,
+                _dropSurfaceMask, QueryTriggerInteraction.Ignore) ||
+            hit.collider == null ||
+            hit.collider.attachedRigidbody != null ||
+            hit.collider.transform.IsChildOf(((Component)container).transform) ||
+            hit.normal.y < MinimumDropSurfaceNormalY)
+        {
+            return false;
+        }
+
+        // Do not skip an obstructing first hit and select a floor underneath it.
+        surfacePoint = hit.point;
+        return true;
     }
 
     private static bool IsEligibleContainer(Container container, Vector3 animalPosition, float sqrRange)
