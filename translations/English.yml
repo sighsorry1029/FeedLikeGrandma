@@ -70,3 +70,8 @@ flg_mead_tamer_tooltip_feed_note: "Feed efficiency affects manual and automatic 
 flg_taming_orb_recovery_hint: "Orb operation unresolved. Use the orb to check its saved server result."
 flg_taming_orb_recovery_blocked: "The orb operation could not be confirmed. Contents are protected; no new creature will be created."
 flg_taming_orb_recovered: "Orb state recovered. You can use it again."
+flg_cuisine_milk_busy: "This Lox is being milked or moved. Try again shortly."
+flg_cuisine_milk_unavailable: "Milking could not be confirmed. Check the connection and try again."
+flg_cuisine_milk_cooldown: "This Lox needs time before it can be milked again."
+flg_cuisine_milk_breeding: "This Lox must breed before it can be milked."
+flg_cuisine_milk_too_far: "Move closer to the Lox to milk it."

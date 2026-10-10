@@ -13,7 +13,8 @@ internal static partial class TamingOrbSystem
     private const string RecipeName = "Recipe_FLG_TamingOrb";
     private const string PayloadKey = "flg.tame.payload";
     private const string CreatureManagerStateKey = "flg.tame.creaturemanager";
-    private const int PayloadVersion = 3;
+    private const int PayloadVersion = 4;
+    private const int LegacyPayloadVersion = 3;
     private const string DefaultSourcePrefabName = "DragonTear";
     private const string CllcEffectKey = "CL&LC effect";
     private const string OdinHorseHaveArmorKey = "HaveArmor";
@@ -390,6 +391,7 @@ internal static partial class TamingOrbSystem
             CllcEffect = zdo.GetInt(CllcEffectKey, 0),
             CllcInfusion = cllcInfusion,
             CllcExtraEffect = cllcExtraEffect,
+            CuisineState = FeedCuisineCompatibility.CaptureState(character, nview),
             OdinHorseHasArmor = LooksLikeOdinHorse(tameable) && zdo.GetBool(OdinHorseHaveArmorHash, false),
             SaddleStamina = TryGetSaddle(character, tameable, out Sadle? saddle)
                 ? Mathf.Clamp(saddle.GetStamina(), 0f, saddle.GetMaxStamina())
@@ -445,6 +447,9 @@ internal static partial class TamingOrbSystem
             zdo.Set(FeedSystem.GrowthLastEvalHash, nowTicks);
         }
 
+        // Restore before publishing the creature as tamed/release-ready so its first
+        // interaction cannot observe a freshly reset milking cooldown.
+        FeedCuisineCompatibility.RestoreState(payload.CuisineState, character, nview);
         character.SetTamed(true);
         character.SetLevel(Mathf.Max(1, payload.Level));
         character.SetMaxHealth(Mathf.Max(1f, payload.MaxHealth));
@@ -1152,6 +1157,9 @@ internal static partial class TamingOrbSystem
 
     private sealed class CapturedTamePayload
     {
+        // Keep a loaded v3 payload's version: pending transactions compare its exact
+        // serialized value, and reading an old Orb must not silently rewrite it.
+        public int SerializationVersion { get; init; } = PayloadVersion;
         public string Prefab { get; init; } = string.Empty;
         public string Name { get; init; } = string.Empty;
         public int Level { get; init; }
@@ -1160,7 +1168,7 @@ internal static partial class TamingOrbSystem
         public bool HasSaddle { get; init; }
         public string Inventory { get; init; } = string.Empty;
 
-        // The v3 envelope continues to store base64; only the game's ZDO storage type changed.
+        // Both envelopes store base64; only the game's ZDO storage type changed.
         public byte[] DecodeInventory() => string.IsNullOrEmpty(Inventory)
             ? Array.Empty<byte>()
             : Convert.FromBase64String(Inventory);
@@ -1173,11 +1181,22 @@ internal static partial class TamingOrbSystem
         public string CllcExtraEffect { get; init; } = string.Empty;
         public bool OdinHorseHasArmor { get; init; }
         public float SaddleStamina { get; init; }
+        public string CuisineState { get; init; } = string.Empty;
 
         public string Serialize()
         {
+            if (SerializationVersion != LegacyPayloadVersion && SerializationVersion != PayloadVersion)
+            {
+                throw new InvalidOperationException("Unsupported Taming Orb payload version.");
+            }
+
+            if (SerializationVersion == PayloadVersion && !FeedCuisineCompatibility.IsValidState(CuisineState))
+            {
+                throw new InvalidOperationException("Invalid ValheimCuisine state in Taming Orb payload.");
+            }
+
             ZPackage pkg = new();
-            pkg.Write(PayloadVersion);
+            pkg.Write(SerializationVersion);
             pkg.Write(Prefab ?? string.Empty);
             pkg.Write(Name ?? string.Empty);
             pkg.Write(Level);
@@ -1194,6 +1213,10 @@ internal static partial class TamingOrbSystem
             pkg.Write(CllcInfusion ?? string.Empty);
             pkg.Write(CllcExtraEffect ?? string.Empty);
             pkg.Write(OdinHorseHasArmor);
+            if (SerializationVersion == PayloadVersion)
+            {
+                pkg.Write(CuisineState);
+            }
             return Convert.ToBase64String(pkg.GetArray());
         }
 
@@ -1204,7 +1227,7 @@ internal static partial class TamingOrbSystem
             {
                 ZPackage pkg = new(Convert.FromBase64String(text));
                 int version = pkg.ReadInt();
-                if (version != PayloadVersion)
+                if (version != LegacyPayloadVersion && version != PayloadVersion)
                 {
                     return false;
                 }
@@ -1225,9 +1248,16 @@ internal static partial class TamingOrbSystem
                 string cllcInfusion = pkg.ReadString();
                 string cllcExtraEffect = pkg.ReadString();
                 bool odinHorseHasArmor = pkg.ReadBool();
+                string cuisineState = version == PayloadVersion ? pkg.ReadString() : string.Empty;
+                if (version == PayloadVersion &&
+                    (pkg.GetPos() != pkg.Size() || !FeedCuisineCompatibility.IsValidState(cuisineState)))
+                {
+                    return false;
+                }
 
                 payload = new CapturedTamePayload
                 {
+                    SerializationVersion = version,
                     Prefab = prefab,
                     Name = name,
                     Level = level,
@@ -1242,6 +1272,7 @@ internal static partial class TamingOrbSystem
                     CllcEffect = cllcEffect,
                     CllcInfusion = cllcInfusion,
                     CllcExtraEffect = cllcExtraEffect,
+                    CuisineState = cuisineState,
                     OdinHorseHasArmor = odinHorseHasArmor,
                     SaddleStamina = saddleStamina
                 };

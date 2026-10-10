@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.6
+
+- Preserved ValheimCuisine Lox milking cooldowns and breeding history through Taming Orb capture and release. Remaining cooldown pauses inside an Orb and continues in world time outside it, including zone unloads.
+- Added server-validated milking with owner-persisted cooldowns, mutual exclusion with Orb capture, and duplicate/reconnect protection. Ambiguous owner writes remain blocked until confirmed or the network session restarts; uncertain milk delivery is not granted again.
+- Fixed excess milk drops when the inventory accepts only part of a stack; only the remaining amount is dropped.
+- Detect ValheimCuisine compatibility from its actual milking methods, settings and installed Harmony patches instead of a fixed version number. Missing cooldown history, including old Orbs, adds no initial waiting period; normal milking starts the configured cooldown. Existing cooldowns are preserved and corrupt records are rejected.
+- Added Orb payload v4 while retaining byte-for-byte v3 compatibility on read/reserialization. Orb networking now uses protocol v3: install 1.1.6 on the server and every client. Newly captured v4 Orbs require this update.
+- Added managed cooldown, compatibility and network regression coverage. Actual host/dedicated multiplayer behavior still requires in-game verification; separate world and character saves are not made atomic.
+
 ## 1.1.5
 
 - Fixed Feed Barrel food placement on raised building floors. Food candidates now use nearby terrain or building surfaces instead of being projected onto terrain underneath the structure.

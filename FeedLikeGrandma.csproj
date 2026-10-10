@@ -132,6 +132,8 @@
         <Compile Include="FeedBetterRidingCompatibility.cs"/>
         <Compile Include="FeedConfig.cs"/>
         <Compile Include="FeedCreatureModifierCompatibility.cs"/>
+        <Compile Include="FeedCuisineCompatibility.cs"/>
+        <Compile Include="FeedCuisineNetwork.cs"/>
         <Compile Include="FeedDragonFlightRestrictionSystem.cs"/>
         <Compile Include="FeedExternalReferenceSupport.cs"/>
         <Compile Include="FeedHoverHud.cs"/>

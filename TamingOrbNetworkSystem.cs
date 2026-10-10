@@ -9,18 +9,18 @@ namespace FeedLikeGrandma;
 internal static partial class TamingOrbSystem
 {
     // The server arbitrates locks, the creature owner captures live state, and the requesting peer owns release spawning.
-    private const string CaptureRequestServerRpc = "FLG_OrbCaptureRequestServer_v2";
-    private const string CapturePrepareOwnerRpc = "FLG_OrbCapturePrepareOwner_v2";
-    private const string CapturePreparedServerRpc = "FLG_OrbCapturePreparedServer_v2";
-    private const string CapturePreparedClientRpc = "FLG_OrbCapturePreparedClient_v2";
-    private const string CaptureCommitServerRpc = "FLG_OrbCaptureCommitServer_v2";
-    private const string CaptureCommitOwnerRpc = "FLG_OrbCaptureCommitOwner_v2";
-    private const string CaptureResultServerRpc = "FLG_OrbCaptureResultServer_v2";
-    private const string CaptureResultClientRpc = "FLG_OrbCaptureResultClient_v2";
-    private const string ReleaseRequestServerRpc = "FLG_OrbReleaseRequestServer_v2";
-    private const string ReleaseApprovedClientRpc = "FLG_OrbReleaseApprovedClient_v2";
-    private const string ReleaseResultServerRpc = "FLG_OrbReleaseResultServer_v2";
-    private const string ReleaseResultClientRpc = "FLG_OrbReleaseResultClient_v2";
+    private const string CaptureRequestServerRpc = "FLG_OrbCaptureRequestServer_v3";
+    private const string CapturePrepareOwnerRpc = "FLG_OrbCapturePrepareOwner_v3";
+    private const string CapturePreparedServerRpc = "FLG_OrbCapturePreparedServer_v3";
+    private const string CapturePreparedClientRpc = "FLG_OrbCapturePreparedClient_v3";
+    private const string CaptureCommitServerRpc = "FLG_OrbCaptureCommitServer_v3";
+    private const string CaptureCommitOwnerRpc = "FLG_OrbCaptureCommitOwner_v3";
+    private const string CaptureResultServerRpc = "FLG_OrbCaptureResultServer_v3";
+    private const string CaptureResultClientRpc = "FLG_OrbCaptureResultClient_v3";
+    private const string ReleaseRequestServerRpc = "FLG_OrbReleaseRequestServer_v3";
+    private const string ReleaseApprovedClientRpc = "FLG_OrbReleaseApprovedClient_v3";
+    private const string ReleaseResultServerRpc = "FLG_OrbReleaseResultServer_v3";
+    private const string ReleaseResultClientRpc = "FLG_OrbReleaseResultClient_v3";
     private const string OrbIdentityKey = "flg.tame.orbId";
     private const float OrbNetworkRetrySeconds = 1f;
     private const float OrbPrepareTimeoutSeconds = 30f;
@@ -246,7 +246,8 @@ internal static partial class TamingOrbSystem
             return;
         }
 
-        if (!CanCaptureReleasedCreature(targetZdo) || HasUnresolvedCaptureForTarget(request.TargetId))
+        if (!CanCaptureReleasedCreature(targetZdo) || HasUnresolvedCaptureForTarget(request.TargetId) ||
+            FeedCuisineCompatibility.IsMilkBusyOnServer(request.TargetId))
         {
             SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_target_busy")));
             return;
@@ -281,6 +282,14 @@ internal static partial class TamingOrbSystem
         ServerCaptureLocks[request.TargetId] = request.TransactionId;
         ServerOrbActionLocks[request.OrbId] = request.TransactionId;
         ForwardCapturePrepare(transaction);
+    }
+
+    internal static bool IsCuisineCaptureBlocked(ZDOID target)
+    {
+        if (!IsOrbServer()) return true;
+        ZDO? zdo = ZDOMan.instance?.GetZDO(target);
+        return zdo == null || ServerCaptureLocks.ContainsKey(target) ||
+            !CanCaptureReleasedCreature(zdo) || HasUnresolvedCaptureForTarget(target);
     }
 
     private static void ForwardCapturePrepare(ServerCaptureTransaction transaction)

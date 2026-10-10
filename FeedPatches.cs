@@ -14,6 +14,7 @@ internal static class ZNetAwakePatch
     {
         FeedSystem.RegisterManualFeedNetworkRpcs();
         TamingOrbSystem.RegisterNetworkRpcs();
+        FeedCuisineCompatibility.RegisterNetworkRpcs();
     }
 }
 
@@ -22,7 +23,11 @@ internal static class OrbZNetDestroyPatch
 {
     private static void Prefix(ZNet __instance)
     {
-        if (ZNet.instance == __instance) TamingOrbSystem.EndNetworkSession();
+        if (ZNet.instance == __instance)
+        {
+            TamingOrbSystem.EndNetworkSession();
+            FeedCuisineCompatibility.EndNetworkSession();
+        }
     }
 }
 
@@ -87,6 +92,7 @@ internal static class PlayerAwakePatch
     {
         FeedSystem.RegisterManualFeedNetworkRpcs();
         TamingOrbSystem.RegisterNetworkRpcs();
+        FeedCuisineCompatibility.RegisterNetworkRpcs();
         FeedLikeGrandmaPlugin.QueueRuntimeRefresh(RuntimeRefreshFlags.FeedBarrel);
     }
 }

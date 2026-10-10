@@ -29,10 +29,11 @@ internal enum RuntimeRefreshFlags
 [BepInDependency("Therzie.Monstrum", BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("Therzie.MonstrumDeepNorth", BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("Raelaziel.OdinHorse", BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency(FeedCuisineCompatibility.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.1.5";
+    internal const string ModVersion = "1.1.6";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -149,6 +150,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
             _harmonyPatched = true;
             _harmony.PatchAll(Assembly.GetExecutingAssembly());
+            FeedCuisineCompatibility.Initialize(_harmony);
 
             if (ConfigSync.IsSourceOfTruth)
             {
@@ -222,6 +224,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         }
 
         TamingOrbSystem.Shutdown();
+        FeedCuisineCompatibility.Shutdown();
         FeedBetterRidingCompatibility.Shutdown();
         FeedDragonFlightRestrictionSystem.Shutdown();
         FeedRidingSystem.Shutdown();

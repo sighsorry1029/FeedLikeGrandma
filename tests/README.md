@@ -36,6 +36,44 @@ Use a disposable world and character. Repeat the networking scenarios on a host 
 
 Do not interpret passing the console checks as proof of these runtime scenarios. In particular, the console runner does not measure allocations, validate RPC transport or execute optional mods.
 
+## Cuisine Lox cooldown / Orb patch — 2026-10-10
+
+The inspected optional DLL is ValheimCuisine 2.3.2, SHA-256 `0C2FBCB367F0803E0CAE6368BDEA8CF1A1E06359F0DF5F6874CC55876E1F146F`. It keeps milking cooldown only in a local StatusEffect instance; creature destruction clears it. Its instance-based SE addition also does not forward the cooldown to the animal owner. This patch replaces only the inspected milking input/hover postfixes, preserving their Harmony owner/order constraints, and routes direct `MilkLox` calls to the same server protocol. Compatibility is based on the actual methods, static typed settings and installed Harmony targets; the version is logged for diagnosis and is not an activation condition. Methods must have the expected parameters, return void, be static and have no open generic parameters. All checks precede removal of Cuisine's original patches. The supplied 2.3.2 DLL is the real-version verification sample; matching metadata does not prove that every future version keeps the same behavior.
+
+The owner persists `flg.vc.milk.v1` before the server can approve milk delivery. New Orb payload v4 contains remaining time and the existing Cuisine breeding flags. Remaining time pauses inside the Orb and is rebased on the destination world's clock on release. World time continues outside the Orb, including zone unload. Existing payload v3 remains byte-for-byte stable when loaded/reserialized. The Orb RPC namespace advances to v3 so older peers cannot silently discard v4 data; all server/client installations must be updated together. Pending/journal formats are unchanged.
+
+Missing history means zero remaining cooldown: an untracked live Lox or an old Orb gets no artificial waiting period. The first successful milking grants milk and persists the normal cooldown. Saved cooldowns remain unchanged and corrupt nonempty records are still rejected. Normal breeding eligibility, bucket, range, ownership and server checks still apply. Breeding history missing from an old Orb cannot be reconstructed. If Cuisine was removed before migration and only its old birth flags remain (no FLG record), an Orb captured then does not preserve those flags. Once a FLG record exists, capture/release preserves it even while Cuisine is absent. This bridge does not copy arbitrary ZDO fields or every status effect.
+
+```powershell
+dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true
+dotnet build tests/RegressionChecks.csproj -c Debug
+./tests/bin/RegressionChecks.exe ./bin/Debug/FeedLikeGrandma.dll
+dotnet build tests/CuisineNetworkChecks.csproj -c Debug
+./tests/bin/cuisine-network/CuisineNetworkChecks.exe
+pwsh -NoProfile -File tests/Check-CuisineApi.ps1 -CecilPath <Mono.Cecil.dll> -CuisineDll <original-ValheimCuisine.dll>
+```
+
+Validation performed: Debug build with no warnings/errors; 68 actual-DLL YAML/payload checks, 40 source-linked fake-transport Cuisine checks, 102 Orb persistence checks, 33 Orb item-state checks and 40 Feed Barrel checks passed (283 total). The original 1.0.16 client/server API checks and supplied Cuisine metadata checks passed. The final merged DLL was deployed to local Steam Valheim plugins and its SHA-256 matched. No Release ZIP was generated.
+
+Version-independent activation follow-up: the exact 2.3.2 gate was removed from both runtime activation and the metadata checker. Debug build passed with no warnings/errors, and the actual-DLL regression runner passed 75 checks, including seven hook-binding checks for a compatible static method and rejection of changed instance/return/parameter/generic/missing methods. The supplied original 2.3.2 DLL passed the updated metadata checker. No other real Cuisine version or in-game Harmony initialization was executed; method fixtures validate the structural gate only. The deployed DLL's SHA-256 matched the final build.
+
+Missing-history simplification follow-up: removed the one-time full cooldown, owner initialization write, special first-check hover action and unused legacy-payload argument. Debug build passed with no warnings/errors and the deployed DLL's SHA-256 matched. The actual-DLL regression runner passed 83 checks, including absent/saved/corrupt record parsing and zero cooldown for old Orb state. The source-linked network runner passed 42 checks, including immediate first grant, normal cooldown persistence, duplicate/early request rejection and corrupt records denied before owner dispatch. No game session was executed for this change.
+
+Release 1.1.6 verification: `dotnet build FeedLikeGrandma.csproj -c Release` succeeded with zero warnings/errors and generated the standard Thunderstore and Nexus ZIPs. All 300 checks passed: 83 YAML/payload/compatibility and 102 persistence checks against the final Release DLL, plus 33 item-state, 40 barrel and 42 network source-linked checks. Original 1.0.16 client/server metadata checks passed (1,721 direct references, 58 explicit Harmony targets, 47 cached private bindings and 13 dynamic/reflection contracts). Assembly/plugin/manifest versions, package entry lists, packaged README/changelog/localization and DLL hashes were verified. Both ZIPs contain the final DLL, and the deployed local game DLL has the same SHA-256: `7D21FE0527A83FAAB2B0EB41E49A32B12D69088A68EB0274A625ECCCD8C90718`. Actual Unity/Harmony startup and multiplayer execution remain unverified.
+
+The network tests exercise dedicated-server validation with no instantiated animal on the server, duplicate requests/apply/results, stale sequences, reconnect cookies, spoofed senders, two-player contention, delayed ZDO evidence, owner migration, capture locks, initial migration and a grant callback that throws after partial delivery. The fixture links the production protocol but simulates transport and helper state; it does not execute Cuisine's Harmony startup, Unity, real ZDO replication or inventory delivery. Original `Inventory.AddItem` analysis confirms partial stack merges before failure, so only the remaining amount is dropped.
+
+Still required in the game, after restarting server and clients with this DLL and Cuisine 2.3.2:
+
+1. Confirm the compatibility initialization message and absence of Harmony errors. Check the existing configured key, modifier keys, milk amount, cooldown, RequireBreeding policy and localized hover text. Recheck with Cuisine absent.
+2. Milk an eligible Lox, record inventory plus dropped milk totals, capture/release repeatedly, and verify it remains unavailable for the remaining cooldown. Repeat with only a partially fillable milk stack and a full inventory; the combined increase must equal the configured amount.
+3. Leave the zone, reconnect, restart the server, and migrate animal ownership. Repeat after transferring a filled Orb to another world. Test a ready Lox, a partially elapsed cooldown, a v3 Orb and an untracked live Lox. Missing history must add no cooldown; with other requirements met, the first milking must grant once and start the normal cooldown. Saved remaining time must still be preserved.
+4. On a host and dedicated server with two clients, have both clients milk simultaneously, then race milking against Orb capture/release. Make the animal owner different from the milker. There must be one owner write and one milk grant, with no additional captured/released creature.
+5. Delay/drop owner acknowledgement and ZDO synchronization, disconnect, die or migrate ownership during approval, and replay a result after 30 seconds. Ambiguous delivery must never grant again. An unconfirmed owner write keeps that animal locked until evidence arrives or the network session restarts; a confirmed cooldown can be consumed without milk after a delivery failure. Character/world saves remain independent, so this is not an atomic crash-recovery guarantee.
+6. Verify optional CreatureManager/CLLC/OdinHorse data and v3 pending Orb recovery still survive alongside v4 Cuisine state. Older clients must time out safely, without consuming an Orb or spawning another creature.
+
+No actual game, host or dedicated multiplayer run was performed for this patch.
+
 ## Feed Barrel floor placement — 2026-10-06
 
 The barrel now probes the terrain/building surface within 1 m of the animal's foot height instead of projecting food candidates onto terrain beneath a structure. A single downward ray ignores triggers and rejects the barrel itself, moving bodies and steep first-hit surfaces; it does not search through them for another floor. The existing range and path checks run before any item is removed.

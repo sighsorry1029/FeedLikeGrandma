@@ -41,6 +41,9 @@ internal static class RegressionChecks
             Assembly assembly = Assembly.LoadFrom(assemblyPath);
             parse = assembly.GetType("FeedLikeGrandma.FeedingYamlParser", true).GetMethod("Parse");
             CheckOrbSaveContract(assembly);
+            CheckOrbCuisineSaveContract(assembly);
+            CheckCuisineMethodContract(assembly);
+            CheckCuisineMissingStatePolicy(assembly);
             CheckYamlContracts();
             Console.WriteLine("Passed " + passed + " checks (.NET " + Environment.Version + ").");
             return 0;
@@ -107,6 +110,8 @@ internal static class RegressionChecks
         object[] arguments = { OrbV3, null, false };
         Check((bool)deserialize.Invoke(null, arguments), "load existing v3 Orb fixture");
         object payload = arguments[1];
+        Check((int)Get(payload, "SerializationVersion") == 3 && (string)Get(payload, "CuisineState") == "",
+              "legacy v3 has no invented Cuisine state");
         var expected = new Dictionary<string, object>
         {
             { "Prefab", "Wolf" }, { "Name", "Grandma" }, { "Level", 3 },
@@ -124,7 +129,7 @@ internal static class RegressionChecks
         {
             Check(!(bool)deserialize.Invoke(null, new object[] { text, null, false }), "reject damaged Orb fixture");
         }
-        foreach (int version in new[] { 2, 4 })
+        foreach (int version in new[] { 2, 5 })
         {
             byte[] bytes = Convert.FromBase64String(OrbV3);
             Array.Copy(BitConverter.GetBytes(version), bytes, 4);
@@ -148,6 +153,120 @@ internal static class RegressionChecks
         catch (TargetInvocationException error) { rejected = error.InnerException is FormatException; }
         Check(rejected && (string)Get(payload, "Inventory") == "damaged inventory!",
               "reject damaged inventory base64 without changing stored data");
+    }
+
+    private static void CheckOrbCuisineSaveContract(Assembly assembly)
+    {
+        Type payloadType = assembly.GetType("FeedLikeGrandma.TamingOrbSystem+CapturedTamePayload", true);
+        MethodInfo deserialize = payloadType.GetMethod("TryDeserialize");
+        MethodInfo serialize = payloadType.GetMethod("Serialize");
+        object fresh = Activator.CreateInstance(payloadType, true);
+        Check((int)Get(fresh, "SerializationVersion") == 4, "new captures default to v4");
+
+        // Build independently with the documented ZPackage binary primitives: v3
+        // fields followed by one versioned Cuisine string. The original fixture stays intact.
+        foreach (string state in new[] { "", "1|7200000000|2|1", "1|0|0|0", "1|72000000000|2147483647|1" })
+        {
+            string fixture = BuildOrbV4(state);
+            object[] arguments = { fixture, null, false };
+            Check((bool)deserialize.Invoke(null, arguments), "load v4 Cuisine state '" + state + "'");
+            object payload = arguments[1];
+            Check((int)Get(payload, "SerializationVersion") == 4 && (string)Get(payload, "CuisineState") == state &&
+                  (string)Get(payload, "Prefab") == "Wolf" && (float)Get(payload, "SaddleStamina") == 76.5f &&
+                  (bool)Get(payload, "OdinHorseHasArmor"), "preserve v4 state and existing optional fields");
+            Check((string)serialize.Invoke(payload, null) == fixture, "v4 exact serialization round trip");
+        }
+
+        byte[] complete = Convert.FromBase64String(BuildOrbV4("1|7200000000|2|1"));
+        foreach (byte[] damaged in new[]
+        {
+            complete.Take(complete.Length - 1).ToArray(),
+            complete.Concat(new byte[] { 0 }).ToArray(),
+            complete.Take(Convert.FromBase64String(OrbV3).Length).ToArray()
+        })
+        {
+            object[] arguments = { Convert.ToBase64String(damaged), null, false };
+            Check(!(bool)deserialize.Invoke(null, arguments) && arguments[1] == null,
+                  "reject missing, truncated, or trailing v4 Cuisine bytes");
+        }
+
+        foreach (string invalid in new[]
+        {
+            "not-state", "2|7200000000|2|1", "1|-1|2|1", "1|72000000001|2|1",
+            "1|NaN|2|1", "1|Infinity|2|1", "1|9223372036854775808|2|1", "1|0|-1|0",
+            "1|0|2147483648|0", "1|0|0|2", "1|0|0|true", "1|0|0", "1|0|0|1|extra"
+        })
+        {
+            object[] arguments = { BuildOrbV4(invalid), null, false };
+            Check(!(bool)deserialize.Invoke(null, arguments) && arguments[1] == null,
+                  "reject invalid embedded Cuisine state '" + invalid + "'");
+        }
+
+        payloadType.GetProperty("CuisineState").SetValue(fresh, "1|-1|0|0");
+        bool rejected = false;
+        try { serialize.Invoke(fresh, null); }
+        catch (TargetInvocationException error) { rejected = error.InnerException is InvalidOperationException; }
+        Check(rejected, "do not write invalid captured Cuisine state");
+    }
+
+    private static void CheckCuisineMethodContract(Assembly assembly)
+    {
+        MethodInfo resolve = assembly.GetType("FeedLikeGrandma.FeedCuisineCompatibility", true)
+            .GetMethod("ReadMilkingMethod", BindingFlags.NonPublic | BindingFlags.Static);
+        object resolved = resolve.Invoke(null, new object[] { typeof(CompatibleCuisineMethods), "Postfix", new[] { typeof(string) } });
+        Check(resolved is MethodInfo, "Cuisine hook binding uses member structure without a plugin version input");
+        foreach (Type incompatible in new[]
+        {
+            typeof(InstanceCuisineMethods), typeof(ReturnValueCuisineMethods), typeof(ChangedParameterCuisineMethods),
+            typeof(BroadParameterCuisineMethods), typeof(GenericCuisineMethods), typeof(MissingCuisineMethods)
+        })
+        {
+            bool rejected = false;
+            try { resolve.Invoke(null, new object[] { incompatible, "Postfix", new[] { typeof(string) } }); }
+            catch (TargetInvocationException error) { rejected = error.InnerException is MissingMethodException; }
+            Check(rejected, "reject incompatible Cuisine hook " + incompatible.Name);
+        }
+    }
+
+    private static class CompatibleCuisineMethods { private static void Postfix(string value) { } }
+    private sealed class InstanceCuisineMethods { private void Postfix(string value) { } }
+    private static class ReturnValueCuisineMethods { private static bool Postfix(string value) => true; }
+    private static class ChangedParameterCuisineMethods { private static void Postfix(int value) { } }
+    private static class BroadParameterCuisineMethods { private static void Postfix(object value) { } }
+    private static class GenericCuisineMethods { private static void Postfix<T>(string value) { } }
+    private static class MissingCuisineMethods { }
+
+    private static void CheckCuisineMissingStatePolicy(Assembly assembly)
+    {
+        Type bridge = assembly.GetType("FeedLikeGrandma.FeedCuisineCompatibility", true);
+        MethodInfo parseRecord = bridge.GetMethod("TryParseRecord", BindingFlags.NonPublic | BindingFlags.Static);
+        object[] missing = { "", 0L, null };
+        Check((bool)parseRecord.Invoke(null, missing) && (long)missing[1] == 0L && (string)missing[2] == "",
+              "missing live Cuisine record is ready without an artificial cooldown or receipt");
+        object[] saved = { "1|7200000000|receipt", 0L, null };
+        Check((bool)parseRecord.Invoke(null, saved) && (long)saved[1] == 7200000000L && (string)saved[2] == "receipt",
+              "existing Cuisine expiry and receipt remain exact");
+        foreach (string corrupt in new[] { "broken", "2|0|", "1|-1|", "1|NaN|", "1|0" })
+            Check(!(bool)parseRecord.Invoke(null, new object[] { corrupt, 0L, null }),
+                  "corrupt Cuisine record is not treated as absent: " + corrupt);
+        MethodInfo parseState = bridge.GetMethod("TryParseState", BindingFlags.NonPublic | BindingFlags.Static);
+        object[] legacy = { "", 0L, 0, false };
+        Check((bool)parseState.Invoke(null, legacy) && (long)legacy[1] == 0L && (int)legacy[2] == 0 && !(bool)legacy[3],
+              "old Orb without Cuisine data has zero cooldown and no invented breeding history");
+    }
+
+    private static string BuildOrbV4(string cuisineState)
+    {
+        byte[] existing = Convert.FromBase64String(OrbV3);
+        using (var stream = new MemoryStream())
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write(4);
+            writer.Write(existing, sizeof(int), existing.Length - sizeof(int));
+            writer.Write(cuisineState);
+            writer.Flush();
+            return Convert.ToBase64String(stream.ToArray());
+        }
     }
 
     private static Parsed Parse(string yaml)

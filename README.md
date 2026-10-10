@@ -344,6 +344,7 @@ The riding skill multiplier scales linearly from `x1` at Riding 0 to the configu
 
 ## Optional compatibility
 
+- **ValheimCuisine:** Compatibility is detected from the required milking methods, typed settings and installed Harmony patches, without restricting the version number. Lox milking uses an owner-written persistent cooldown with server validation. Taming Orbs preserve the remaining cooldown and breeding eligibility. Install the same FeedLikeGrandma patch on the server and all clients; this Orb protocol cannot transact with older clients. Existing v3 Orbs remain readable, but newly captured v4 Orbs require this patch.
 - **BetterRiding:** Per-prefab attack cost, jump cost, and attack cooldown; held-attack stamina protection; mount attack safety; feed/heal ordering; and water dismount support.
 - **DragonRiders:** Water dismount support and BetterRiding dragon-flight integration.
 - **Expand World Data:** Custom biome names can be used in `restrictedBiome`.
@@ -353,6 +354,10 @@ The riding skill multiplier scales linearly from `x1` at Riding 0 to the configu
 - **CreatureManager template and Jotunn creature registrations:** Loaded prefab and consume information is included in generated references when discoverable.
 
 Dragon flight is blocked when the rider is encumbered if `Block Encumbered Dragon Flight` is enabled. The global restricted-biome list defaults to `Ashlands`; a dragon entering a restricted biome is forced out of flight, and new flight attempts are rejected with a center-screen message.
+
+Cuisine cooldowns count down in world time while a Lox is outside an Orb, including while its zone is unloaded, and pause inside an Orb. Missing cooldown history, including an old Orb, adds no waiting time; the first successful milking records the normal configured cooldown. Existing saved cooldowns are preserved, and corrupt records are rejected. The normal breeding and interaction requirements still apply; old Orbs cannot recover breeding history that was never saved. Previously migrated Cuisine state survives Orb transfers even if Cuisine is temporarily absent. If a required integration member or patch is incompatible, Cuisine's original behavior is restored and Lox Orb transactions are blocked with a compatibility error. The inspected DLL is 2.3.2; matching API structure allows other versions to load, but does not guarantee unchanged behavior in every future version.
+
+Milking and Orb capture are mutually exclusive. The owner records the cooldown before milk is granted, and a repeated network response cannot grant twice. An uncertain owner write keeps that Lox locked until the write is confirmed or the network session restarts. A disconnect or failure during delivery can consume the cooldown without delivering milk; it is intentionally not retried as a second grant. World and player saves are still separate. The game needs to be restarted after installing this patch.
 
 ## Breeding limit protection
 

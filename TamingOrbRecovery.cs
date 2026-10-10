@@ -8,8 +8,8 @@ namespace FeedLikeGrandma;
 
 internal static partial class TamingOrbSystem
 {
-    private const string OrbRecoveryServerRpc = "FLG_OrbRecoveryServer_v2";
-    private const string OrbRecoveryClientRpc = "FLG_OrbRecoveryClient_v2";
+    private const string OrbRecoveryServerRpc = "FLG_OrbRecoveryServer_v3";
+    private const string OrbRecoveryClientRpc = "FLG_OrbRecoveryClient_v3";
     private static TamingOrbJournal? _orbJournal;
     private static string? _orbJournalError;
     private static readonly Dictionary<string, float> OrbRecoveryRequests = new(StringComparer.Ordinal);
