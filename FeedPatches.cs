@@ -118,8 +118,9 @@ internal static class ContainerOnDestroyedPatch
 [HarmonyPatch(typeof(Tameable), nameof(Tameable.UseItem))]
 internal static class TameableUseItemPatch
 {
-    private static bool Prefix(Tameable __instance, Humanoid user, ItemDrop.ItemData item, ref bool __result)
+    private static bool Prefix(Tameable __instance, Humanoid user, ItemDrop.ItemData item, ref bool __result, bool __runOriginal)
     {
+        if (!__runOriginal) return false;
         if (TamingOrbSystem.TryHandleTameableUseItem(__instance, user, item))
         {
             __result = true;
@@ -222,8 +223,9 @@ internal static class MonsterAICanConsumePatch
 [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.UseItem))]
 internal static class HumanoidUseItemPatch
 {
-    private static bool Prefix(Humanoid __instance, Inventory inventory, ItemDrop.ItemData item, bool fromInventoryGui)
+    private static bool Prefix(Humanoid __instance, Inventory inventory, ItemDrop.ItemData item, bool fromInventoryGui, bool __runOriginal)
     {
+        if (!__runOriginal) return false;
         if (!fromInventoryGui && __instance is Player player && TamingOrbSystem.TryHandlePlayerUseItem(player, item))
         {
             return false;
@@ -241,8 +243,9 @@ internal static class HumanoidUseItemPatch
 [HarmonyPatch(typeof(Player), "UseHotbarItem")]
 internal static class PlayerUseHotbarItemPatch
 {
-    private static bool Prefix(Player __instance, int index)
+    private static bool Prefix(Player __instance, int index, bool __runOriginal)
     {
+        if (!__runOriginal) return false;
         ItemDrop.ItemData item = __instance.GetInventory().GetItemAt(index - 1, 0);
         return !TamingOrbSystem.TryHandlePlayerUseItem(__instance, item);
     }

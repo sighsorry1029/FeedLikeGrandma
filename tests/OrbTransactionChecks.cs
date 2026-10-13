@@ -251,6 +251,17 @@ internal static class OrbTransactionChecks
             Require(!SaveJournal(journal, failed, out error), "failure terminal receipt is immutable");
             Require(SaveJournal(journal, NewEntry(Guid.NewGuid().ToString("N"), failedOrb, "release", "Reserved"), out error), "new request after conclusive failure can reserve orb");
             Require((bool)Get(journal, "IsHealthy"), "validation rejections do not poison healthy journal");
+
+            string deniedOrb = Guid.NewGuid().ToString("N");
+            object deniedCapture = NewEntry(Guid.NewGuid().ToString("N"), deniedOrb, "capture", "Reserved");
+            Require(SaveJournal(journal, deniedCapture, out error), "reserve capture before ward recheck");
+            Set(deniedCapture, "State", "Committing");
+            Set(deniedCapture, "PreparedData", Encode("staged-creature-before-dispatch"));
+            Require(SaveJournal(journal, deniedCapture, out error), "stage capture before ward recheck");
+            Set(deniedCapture, "State", "CompletedFailure");
+            Set(deniedCapture, "ResultData", Encode("ward-denied-before-dispatch"));
+            Require(SaveJournal(journal, deniedCapture, out error), "persist ward denial after staging but before dispatch");
+            Require(!IsBlocked(journal, deniedOrb, "capture") && !IsBlocked(journal, deniedOrb, "release"), "ward-denied capture releases journal lock");
         }
         finally { ((IDisposable)journal).Dispose(); }
 

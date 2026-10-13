@@ -271,6 +271,12 @@ internal static partial class TamingOrbSystem
             return false;
         }
 
+        if (!FeedWardCompatibility.IsAllowed(player, ((Component)character).transform.position))
+        {
+            FeedLocalization.Message(player, FeedWardCompatibility.DeniedToken);
+            return false;
+        }
+
         PlayActionEffect(character.GetCenterPoint(), ((Component)character).transform.rotation);
         FeedLocalization.Message(player, "$flg_taming_orb_capturing", character.GetHoverName());
         if (BeginNetworkCapture(player, item, nview.GetZDO().m_uid, creaturePrefabName, ActionDelay))
@@ -328,6 +334,11 @@ internal static partial class TamingOrbSystem
         }
 
         GetReleaseTransform(player, out Vector3 spawnPosition, out Quaternion spawnRotation);
+        if (!FeedWardCompatibility.IsAllowed(player, spawnPosition))
+        {
+            FeedLocalization.Message(player, FeedWardCompatibility.DeniedToken);
+            return false;
+        }
         string creatureManagerState = item.m_customData.TryGetValue(
             CreatureManagerStateKey,
             out string? storedCreatureManagerState)

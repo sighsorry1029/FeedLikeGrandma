@@ -1,4 +1,5 @@
 flg_taming_orb: "Taming Orb"
+flg_taming_orb_ward_denied: "Taming Orb use is blocked here by STUWard."
 flg_taming_orb_description: "Stores one tamed creature for travel."
 flg_taming_orb_disabled: "Taming Orb is disabled."
 flg_taming_orb_use_on_tamed: "Use Taming Orb on a tamed creature."

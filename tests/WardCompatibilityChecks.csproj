@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>obj\ward-compatibility\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <OutputPath>bin\ward-compatibility\</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="WardCompatibilityChecks.cs" />
+  </ItemGroup>
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

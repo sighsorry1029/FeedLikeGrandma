@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.7
+
+- Fixed feeding and Taming Orb hooks continuing after another Harmony patch had blocked item use. Existing ward restrictions now stop these actions before their side effects.
+- Added optional STUWard 1.4.0 integration. Add `FLG_TamingOrb` to STUWard's `item_prefab_policy.blocked_item_prefabs` to check both the player and capture target or release position, including use from outside a ward.
+- Validate new Orb requests on the server and recheck access before capture commit or local creature spawning. Ward denials use existing rollback and transaction recovery paths; completed actions can still resolve. Orb payloads, RPC formats, and saved transaction records are unchanged.
+- Added English and Korean ward-denial messages and focused compatibility and recovery checks. Rewrote the README with a separate detailed user guide. Actual game and multiplayer verification remains pending.
+- Update FeedLikeGrandma on the server and every client together. For ward integration, also install STUWard 1.4.0 or later on all of them. If STUWard is installed but its required API is unavailable, new Orb actions are blocked; STUWard remains optional.
+
 ## 1.1.6
 
 - Preserved ValheimCuisine Lox milking cooldowns and breeding history through Taming Orb capture and release. Remaining cooldown pauses inside an Orb and continues in world time outside it, including zone unloads.

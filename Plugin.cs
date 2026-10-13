@@ -30,10 +30,11 @@ internal enum RuntimeRefreshFlags
 [BepInDependency("Therzie.MonstrumDeepNorth", BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency("Raelaziel.OdinHorse", BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency(FeedCuisineCompatibility.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency(FeedWardCompatibility.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.1.6";
+    internal const string ModVersion = "1.1.7";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";

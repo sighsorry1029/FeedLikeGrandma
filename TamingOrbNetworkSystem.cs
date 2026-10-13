@@ -246,6 +246,12 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        if (!FeedWardCompatibility.IsAllowed(requesterZdo, targetZdo.GetPosition()))
+        {
+            SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text(FeedWardCompatibility.DeniedToken)));
+            return;
+        }
+
         if (!CanCaptureReleasedCreature(targetZdo) || HasUnresolvedCaptureForTarget(request.TargetId) ||
             FeedCuisineCompatibility.IsMilkBusyOnServer(request.TargetId))
         {
@@ -541,6 +547,19 @@ internal static partial class TamingOrbSystem
 
             // Once dispatched, a missing target may mean the owner already destroyed it; retain the lock and retry.
             return;
+        }
+
+        // Recheck just before the first destructive dispatch, after the capture delay.
+        // Later retries may refer to an already deleted animal and must still resolve.
+        if (!transaction.CommitForwarded)
+        {
+            ZDO? requester = ZDOMan.instance.GetZDO(transaction.Request.RequesterId);
+            ZDO? target = ZDOMan.instance.GetZDO(transaction.Request.TargetId);
+            if (target == null || !FeedWardCompatibility.IsAllowed(requester, target.GetPosition()))
+            {
+                CompleteUndispatchedCaptureFailure(transaction, FeedLocalization.Text(FeedWardCompatibility.DeniedToken));
+                return;
+            }
         }
 
         transaction.OwnerPeerId = ownerPeerId;
@@ -848,6 +867,12 @@ internal static partial class TamingOrbSystem
             return;
         }
 
+        if (!FeedWardCompatibility.IsAllowed(requesterZdo, request.SpawnPosition))
+        {
+            SendReleaseApprovalToPeer(sender, OrbReleaseApproval.Failure(request, FeedLocalization.Text(FeedWardCompatibility.DeniedToken)));
+            return;
+        }
+
         ServerReleaseTransaction transaction = new()
         {
             Request = request,
@@ -910,6 +935,14 @@ internal static partial class TamingOrbSystem
         {
             transaction.SpawnAttempted = true;
             transaction.Result = OrbReleaseResult.Failure(transaction.Request, FeedLocalization.Text("$flg_taming_orb_data_changed"));
+            SendReleaseResultToServer(transaction.Result);
+            return;
+        }
+
+        if (!FeedWardCompatibility.IsAllowed(player, transaction.Request.SpawnPosition))
+        {
+            transaction.SpawnAttempted = true;
+            transaction.Result = OrbReleaseResult.Failure(transaction.Request, FeedLocalization.Text(FeedWardCompatibility.DeniedToken));
             SendReleaseResultToServer(transaction.Result);
             return;
         }

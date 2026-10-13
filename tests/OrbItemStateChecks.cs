@@ -34,6 +34,7 @@ namespace FeedLikeGrandma
             try
             {
                 CheckReleaseMove();
+                CheckDeniedRelease();
                 CheckCaptureRollback();
                 CheckIsolationAndAmbiguity();
                 CheckMutationGuards();
@@ -74,6 +75,20 @@ namespace FeedLikeGrandma
             Require(original.m_customData.ContainsKey(PayloadKey) && HasPendingOrbItem(original), "stale original reference is not mistaken for inventory item");
             Require(moved.m_customData["another-mod"] == "preserve", "release retains unrelated custom data");
             Require(!TryFinishPendingOrbItem(moved, state, restorePrevious: false, clearContents: true), "duplicate success cannot mutate completed orb");
+        }
+
+        private static void CheckDeniedRelease()
+        {
+            ItemDrop.ItemData original = NewOrb(filled: true);
+            OrbPendingItemState state = NewState(original, OrbPendingAction.Release);
+            Require(TryBeginPendingOrbItem(original, state), "begin approved release before ward denial");
+            ItemDrop.ItemData moved = MoveFixture(original);
+            Require(TryFinishPendingOrbItem(moved, state, restorePrevious: false, clearContents: false), "ward-denied release resolves moved item without clearing contents");
+            Require(!HasPendingOrbItem(moved) && moved.m_variant == original.m_variant && moved.m_stack == original.m_stack &&
+                moved.m_customData[PayloadKey] == original.m_customData[PayloadKey] &&
+                moved.m_customData[CreatureManagerStateKey] == original.m_customData[CreatureManagerStateKey] &&
+                moved.m_customData[OrbIdentityKey] == state.OrbId, "ward-denied release keeps exact filled orb and identity");
+            Require(!TryFinishPendingOrbItem(moved, state, restorePrevious: false, clearContents: true), "late success cannot consume an already denied release");
         }
 
         private static void CheckCaptureRollback()
