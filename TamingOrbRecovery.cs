@@ -10,6 +10,7 @@ internal static partial class TamingOrbSystem
 {
     private const string OrbRecoveryServerRpc = "FLG_OrbRecoveryServer_v3";
     private const string OrbRecoveryClientRpc = "FLG_OrbRecoveryClient_v3";
+    private const string EmptyReleasedOrbRecovery = "EmptyReleased";
     private static TamingOrbJournal? _orbJournal;
     private static string? _orbJournalError;
     private static readonly Dictionary<string, float> OrbRecoveryRequests = new(StringComparer.Ordinal);
@@ -172,6 +173,39 @@ internal static partial class TamingOrbSystem
         return true;
     }
 
+    private static bool TryRecoverEmptyOrbOnClient(string txId, string orbId, string requestData)
+    {
+        Player? player = Player.m_localPlayer;
+        if (player == null) return false;
+        foreach (ClientCaptureTransaction capture in ClientCaptureTransactions.Values)
+            if (capture.Request.OrbId == orbId && (capture.Request.TransactionId != txId ||
+                capture.Phase != OrbCaptureClientPhase.Requesting || capture.Prepared != null)) return false;
+        foreach (ClientReleaseTransaction release in ClientReleaseTransactions.Values)
+            if (release.Request.OrbId == orbId) return false;
+
+        if (!TryRenewEmptyOrbIdentity(player.GetInventory(), txId, orbId, OrbWorldUid(), requestData)) return false;
+        ClientCaptureTransactions.Remove(txId);
+        OrbRecoveryRequests.Remove(txId);
+        player.GetInventory().Changed();
+        FeedLocalization.Message(player, "$flg_taming_orb_recovered");
+        return true; // Retry explicitly; this response never captures or spawns a creature.
+    }
+
+    private static bool CanRecoverEmptyOrbIdentity(string orbId)
+    {
+        if (!EnsureOrbJournal() || !_orbJournal!.TryGetBlockingRelease(orbId, out TamingOrbJournal.Entry? released) ||
+            released == null || !OrbReleaseResult.IsCompletedReleaseForEmptyOrb(released, orbId)) return false;
+
+        // Successful releases retain their replay lock until cleanup. It is safe to leave
+        // that completed lock intact, but a different or unfinished operation must block repair.
+        if (ServerOrbActionLocks.TryGetValue(orbId, out string lockedBy) && lockedBy != released.TransactionId) return false;
+        foreach (ServerCaptureTransaction capture in ServerCaptureTransactions.Values)
+            if (capture.Request.OrbId == orbId && capture.Phase != OrbCaptureServerPhase.Completed) return false;
+        foreach (ServerReleaseTransaction release in ServerReleaseTransactions.Values)
+            if (release.Request.OrbId == orbId && release.Result == null) return false;
+        return true;
+    }
+
     private static void ReceiveOrbRecoveryOnServer(long sender, ZPackage pkg)
     {
         if (!IsOrbServer()) return;
@@ -190,6 +224,14 @@ internal static partial class TamingOrbSystem
                 state = CanUseStoredOutcome(entry) ? entry.State : "unknown";
                 prepared = entry.PreparedData;
             }
+            else if (EnsureOrbJournal() && !_orbJournal!.TryGet(txId, out _) &&
+                     OrbCaptureRequest.TryRead(new ZPackage(requestData), out OrbCaptureRequest? capture) && capture != null &&
+                     IsValidCaptureRequest(capture) && capture.TransactionId == txId && capture.OrbId == orbId &&
+                     CanRecoverEmptyOrbIdentity(orbId))
+            {
+                state = EmptyReleasedOrbRecovery;
+                prepared = requestData; // Bind this permission to the exact rejected capture request.
+            }
             else if (EnsureOrbJournal() && _orbJournal!.TryGetBlockingRelease(orbId, out TamingOrbJournal.Entry? consumed) &&
                      consumed != null && consumed.State == TamingOrbJournal.CompletedSuccess && CanUseStoredOutcome(consumed) &&
                      OrbReleaseRequest.TryRead(new ZPackage(requestData), out OrbReleaseRequest? requested) && requested != null &&
@@ -197,7 +239,8 @@ internal static partial class TamingOrbSystem
                      OrbReleaseRequest.TryRead(new ZPackage(consumed.RequestData), out OrbReleaseRequest? original) && original != null &&
                      requested.Payload == original.Payload && requested.CreatureManagerState == original.CreatureManagerState)
                 state = TamingOrbJournal.CompletedSuccess;
-            // A missing record is not proof of failure after a backup restore. Keep the item quarantined.
+            // A missing record alone is not proof of failure after a backup restore. Only
+            // the confirmed empty-identity case above is recoverable without a world mutation.
             ZPackage reply = new();
             reply.Write(world); reply.Write(txId); reply.Write(orbId); reply.Write(state); reply.Write(prepared);
             ZRoutedRpc.instance.InvokeRoutedRPC(sender, OrbRecoveryClientRpc, reply);
@@ -213,6 +256,13 @@ internal static partial class TamingOrbSystem
             long world = pkg.ReadLong(); string txId = pkg.ReadString(); string orbId = pkg.ReadString();
             string state = pkg.ReadString(); string prepared = pkg.ReadString();
             if (world != OrbWorldUid() || !OrbRecoveryRequests.ContainsKey(txId)) return;
+            if (state == EmptyReleasedOrbRecovery)
+            {
+                if (TryRecoverEmptyOrbOnClient(txId, orbId, prepared)) return;
+                if (Player.m_localPlayer != null)
+                    FeedLocalization.Message(Player.m_localPlayer, "$flg_taming_orb_recovery_blocked");
+                return;
+            }
             bool success = state == TamingOrbJournal.CompletedSuccess;
             bool final = success || state == TamingOrbJournal.CompletedFailure;
             bool resolved = final && ResolveOrbItem(txId, orbId, success, prepared);
@@ -361,7 +411,9 @@ internal static partial class TamingOrbSystem
             return true; // A persisted reservation must be reconciled, never silently re-executed.
         }
         if (!_orbJournal.TryGetBlockingAction(request.OrbId, TamingOrbJournal.Capture, out _)) return false;
-        SendCapturePreparedToPeer(peer, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
+        OrbCapturePrepared rejected = OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked"));
+        rejected.RecoverEmptyOrb = CanRecoverEmptyOrbIdentity(request.OrbId);
+        SendCapturePreparedToPeer(peer, rejected);
         return true;
     }
 

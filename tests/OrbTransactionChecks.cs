@@ -6,8 +6,9 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 
-// Tests only managed persistence contracts in the built DLL. No Unity, RPC transport,
-// network ownership, player save, or actual server is initialized by this executable.
+// Tests managed persistence/packet contracts in the built DLL with original game types.
+// Run under the original game's Mono: desktop .NET Framework cannot load every game
+// type used by ZPackage. No Unity scene, RPC transport, player save, or server starts.
 internal static class OrbTransactionChecks
 {
     private const BindingFlags AnyInstance = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
@@ -19,6 +20,12 @@ internal static class OrbTransactionChecks
     private static Type snapshotType;
     private static Type journalType;
     private static Type entryType;
+    private static Type orbSystemType;
+    private static Type preparedType;
+    private static Type releaseRequestType;
+    private static Type releaseResultType;
+    private static Type packageType;
+    private static Type zdoIdType;
 
     private static int Main(string[] args)
     {
@@ -38,15 +45,23 @@ internal static class OrbTransactionChecks
         try
         {
             Assembly plugin = Assembly.LoadFrom(pluginPath);
+            orbSystemType = plugin.GetType("FeedLikeGrandma.TamingOrbSystem", true);
             pendingType = plugin.GetType("FeedLikeGrandma.TamingOrbSystem+OrbPendingItemState", true);
             snapshotType = plugin.GetType("FeedLikeGrandma.TamingOrbSystem+OrbItemSnapshot", true);
             journalType = plugin.GetType("FeedLikeGrandma.TamingOrbJournal", true);
             entryType = journalType.GetNestedType("Entry", BindingFlags.NonPublic);
             CheckPendingPersistence();
             CheckJournal();
+            preparedType = orbSystemType.GetNestedType("OrbCapturePrepared", BindingFlags.NonPublic);
+            releaseRequestType = orbSystemType.GetNestedType("OrbReleaseRequest", BindingFlags.NonPublic);
+            releaseResultType = orbSystemType.GetNestedType("OrbReleaseResult", BindingFlags.NonPublic);
+            packageType = preparedType.GetMethod("Write", AnyInstance).ReturnType;
+            zdoIdType = preparedType.GetProperty("TargetId", AnyInstance).PropertyType;
+            CheckEmptyOrbProtocol();
+            CheckCompletedReleaseProof();
             string runtime = Type.GetType("Mono.Runtime") == null ? ".NET Framework" : "Mono";
             Console.WriteLine("Passed " + passed + " Orb persistence checks (" + runtime + " " + Environment.Version + ").");
-            Console.WriteLine("Scope: managed saved-state/journal contracts only; Unity, RPC, and multiplayer execution are not tested.");
+            Console.WriteLine("Scope: managed saved-state/journal, packet codec, and receipt proof contracts only; Unity, RPC transport, and multiplayer execution are not tested.");
             return 0;
         }
         catch (Exception exception)
@@ -54,6 +69,241 @@ internal static class OrbTransactionChecks
             Console.Error.WriteLine(exception);
             return 1;
         }
+    }
+
+    private static void CheckEmptyOrbProtocol()
+    {
+        object ordinary = NewPrepared();
+        object legacyPackage = Activator.CreateInstance(packageType);
+        foreach (object field in new object[] { TransactionId, false, false, Get(ordinary, "TargetId"), "Lox", "", "", "blocked" })
+            WritePackageField(legacyPackage, field);
+        byte[] legacy = PackageBytes(legacyPackage);
+        Require(PackageBytes(Invoke(ordinary, "Write")).SequenceEqual(legacy),
+            "ordinary prepared reply retains exact legacy bytes without an optional false trailer");
+
+        object parsed;
+        Require(TryReadPacket(preparedType, legacy, out parsed) && !(bool)Get(parsed, "RecoverEmptyOrb"),
+            "legacy server reply defaults to no empty-orb recovery authorization");
+        Require(PackageBytes(Invoke(parsed, "Write")).SequenceEqual(legacy),
+            "legacy prepared bytes remain identical after parse/write for immutable journal recovery");
+
+        object captured = NewPrepared();
+        Set(captured, "Success", true);
+        Set(captured, "Payload", "captured/payload=+/한글");
+        Set(captured, "CreatureManagerState", "{\"modifier\":\"Armored\"}");
+        object capturedLegacyPackage = Activator.CreateInstance(packageType);
+        foreach (object field in new object[] { TransactionId, true, false, Get(captured, "TargetId"), "Lox",
+            Get(captured, "Payload"), Get(captured, "CreatureManagerState"), "blocked" })
+            WritePackageField(capturedLegacyPackage, field);
+        byte[] capturedLegacy = PackageBytes(capturedLegacyPackage);
+        Require(PackageBytes(Invoke(captured, "Write")).SequenceEqual(capturedLegacy) &&
+                TryReadPacket(preparedType, capturedLegacy, out parsed) &&
+                PackageBytes(Invoke(parsed, "Write")).SequenceEqual(capturedLegacy),
+            "successful prepared payload and modifier bytes remain unchanged when old journal data is reserialized");
+
+        Set(ordinary, "RecoverEmptyOrb", true);
+        byte[] recovery = PackageBytes(Invoke(ordinary, "Write"));
+        Require(recovery.SequenceEqual(legacy.Concat(new byte[] { 1 })),
+            "server recovery authorization adds only its optional true trailer");
+        Require(TryReadPacket(preparedType, recovery, out parsed) && (bool)Get(parsed, "RecoverEmptyOrb") &&
+                !(bool)Get(parsed, "Success") && !(bool)Get(parsed, "RetryOwner"),
+            "recovery authorization round trips only as a failed, non-retrying capture reply");
+
+        object oldReader = NewPackage(recovery);
+        Require((string)Invoke(oldReader, "ReadString") == TransactionId &&
+                !(bool)Invoke(oldReader, "ReadBool") && !(bool)Invoke(oldReader, "ReadBool"),
+            "legacy reader still sees a failed capture at the start of an extended reply");
+        Require(Invoke(oldReader, "ReadZDOID").Equals(Get(ordinary, "TargetId")) &&
+                (string)Invoke(oldReader, "ReadString") == "Lox" &&
+                (string)Invoke(oldReader, "ReadString") == "" &&
+                (string)Invoke(oldReader, "ReadString") == "" &&
+                (string)Invoke(oldReader, "ReadString") == "blocked",
+            "legacy reader consumes unchanged fields and ignores the recovery trailer");
+
+        foreach (byte[] invalid in new[]
+        {
+            legacy.Take(legacy.Length - 1).ToArray(),
+            legacy.Concat(new byte[] { 0 }).ToArray(),
+            legacy.Concat(new byte[] { 2 }).ToArray(),
+            recovery.Concat(new byte[] { 1 }).ToArray()
+        })
+            Require(!TryReadPacket(preparedType, invalid, out parsed), "reject truncated or malformed recovery reply");
+
+        foreach (string conflicting in new[] { "Success", "RetryOwner" })
+        {
+            object conflict = NewPrepared();
+            Set(conflict, "RecoverEmptyOrb", true);
+            Set(conflict, conflicting, true);
+            Require(!TryReadPacket(preparedType, PackageBytes(Invoke(conflict, "Write")), out parsed),
+                "recovery authorization cannot also signal " + conflicting);
+        }
+        foreach (string content in new[] { "Payload", "CreatureManagerState" })
+        {
+            object conflict = NewPrepared();
+            Set(conflict, "RecoverEmptyOrb", true);
+            Set(conflict, content, "unexpected-content");
+            Require(!TryReadPacket(preparedType, PackageBytes(Invoke(conflict, "Write")), out parsed),
+                "empty-orb recovery reply cannot carry " + content);
+        }
+    }
+
+    private static void CheckCompletedReleaseProof()
+    {
+        object valid = NewCompletedReleaseEntry();
+        Require(IsCompletedReleaseProof(valid, OrbId), "matching successful release receipt authorizes retiring an empty identity");
+        Require(!IsCompletedReleaseProof(valid, Guid.NewGuid().ToString("N")), "release receipt cannot authorize another orb identity");
+
+        foreach (Action<object> change in new Action<object>[]
+        {
+            entry => Set(entry, "Kind", "capture"),
+            entry => Set(entry, "State", "Reserved"),
+            entry => Set(entry, "State", "Committing"),
+            entry => Set(entry, "State", "CompletedFailure"),
+            entry => Set(entry, "OrbId", Guid.NewGuid().ToString("N")),
+            entry => Set(entry, "TransactionId", Guid.NewGuid().ToString("N")),
+            entry => Set(entry, "RequestData", "invalid-base64!"),
+            entry => Set(entry, "ResultData", "invalid-base64!"),
+            entry => Set(entry, "ResultData", "")
+        })
+        {
+            object invalid = NewCompletedReleaseEntry();
+            change(invalid);
+            Require(!IsCompletedReleaseProof(invalid, OrbId), "incomplete, unrelated, or corrupt receipt cannot authorize empty-orb recovery");
+        }
+
+        foreach (string property in new[] { "TransactionId", "OrbId" })
+        {
+            object request = NewReleaseRequest();
+            Set(request, property, Guid.NewGuid().ToString("N"));
+            object entry = NewCompletedReleaseEntry();
+            Set(entry, "RequestData", PacketText(request));
+            Require(!IsCompletedReleaseProof(entry, OrbId), "release request must match receipt " + property);
+
+            object result = NewReleaseResult();
+            Set(result, property, Guid.NewGuid().ToString("N"));
+            entry = NewCompletedReleaseEntry();
+            Set(entry, "ResultData", PacketText(result));
+            Require(!IsCompletedReleaseProof(entry, OrbId), "release result must match receipt " + property);
+        }
+
+        object failed = NewReleaseResult();
+        Set(failed, "Success", false);
+        object failedEntry = NewCompletedReleaseEntry();
+        Set(failedEntry, "ResultData", PacketText(failed));
+        Require(!IsCompletedReleaseProof(failedEntry, OrbId), "receipt label alone is insufficient without successful release result");
+
+        object noCreature = NewReleaseResult();
+        Set(noCreature, "SpawnedId", Activator.CreateInstance(zdoIdType));
+        object noCreatureEntry = NewCompletedReleaseEntry();
+        Set(noCreatureEntry, "ResultData", PacketText(noCreature));
+        Require(!IsCompletedReleaseProof(noCreatureEntry, OrbId), "successful release result must identify its spawned creature");
+
+        object otherHolder = NewReleaseRequest();
+        Set(otherHolder, "RequesterId", NewZdoId(987654321L, 567U));
+        object transferred = NewCompletedReleaseEntry();
+        Set(transferred, "RequestData", PacketText(otherHolder));
+        Require(IsCompletedReleaseProof(transferred, OrbId), "retiring empty identity does not bind it to an obsolete holder ZDOID");
+
+        string directory = Path.Combine(Path.GetTempPath(), "FeedLikeGrandma-OrbProofTests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            const long world = 31415926L;
+            object journal = OpenJournal(directory, world);
+            try
+            {
+                string error;
+                Require(SaveJournal(journal, valid, out error), "persist completed release proof fixture");
+                byte[] before = ReadOpenJournal(JournalPath(directory, world));
+                object stored;
+                Require(GetReceipt(journal, TransactionId, out stored) && IsCompletedReleaseProof(stored, OrbId),
+                    "persisted release proof remains eligible without world or Unity state");
+                Require(ReadOpenJournal(JournalPath(directory, world)).SequenceEqual(before) &&
+                        IsBlocked(journal, OrbId, "capture") && IsBlocked(journal, OrbId, "release"),
+                    "empty-identity proof preserves exact journal bytes and old identity replay protection");
+            }
+            finally { ((IDisposable)journal).Dispose(); }
+        }
+        finally
+        {
+            // Only this runner's newly-created exact temporary directory is removed.
+            Directory.Delete(directory, true);
+        }
+    }
+
+    private static object NewPrepared()
+    {
+        object value = Activator.CreateInstance(preparedType, true);
+        Set(value, "TransactionId", TransactionId);
+        Set(value, "TargetId", NewZdoId(42L, 24U));
+        Set(value, "ExpectedPrefab", "Lox");
+        Set(value, "Message", "blocked");
+        return value;
+    }
+
+    private static object NewReleaseRequest()
+    {
+        object value = Activator.CreateInstance(releaseRequestType, true);
+        Set(value, "TransactionId", TransactionId);
+        Set(value, "OrbId", OrbId);
+        Set(value, "RequesterId", NewZdoId(42L, 1U));
+        Set(value, "Payload", "opaque-existing-release-payload");
+        return value;
+    }
+
+    private static object NewReleaseResult()
+    {
+        object value = Activator.CreateInstance(releaseResultType, true);
+        Set(value, "TransactionId", TransactionId);
+        Set(value, "OrbId", OrbId);
+        Set(value, "Success", true);
+        Set(value, "SpawnedId", NewZdoId(42L, 2U));
+        return value;
+    }
+
+    private static object NewCompletedReleaseEntry()
+    {
+        object entry = NewEntry(TransactionId, OrbId, "release", "CompletedSuccess");
+        Set(entry, "RequestData", PacketText(NewReleaseRequest()));
+        Set(entry, "ResultData", PacketText(NewReleaseResult()));
+        return entry;
+    }
+
+    private static bool IsCompletedReleaseProof(object entry, string orbId)
+    {
+        MethodInfo proof = releaseResultType.GetMethod("IsCompletedReleaseForEmptyOrb", AnyStatic);
+        if (proof == null) throw new MissingMethodException("IsCompletedReleaseForEmptyOrb");
+        return (bool)proof.Invoke(null, new[] { entry, orbId });
+    }
+
+    private static object NewZdoId(long userId, uint objectId) => Activator.CreateInstance(zdoIdType, userId, objectId);
+    private static object NewPackage(byte[] bytes) => Activator.CreateInstance(packageType, new object[] { Convert.ToBase64String(bytes) });
+    private static byte[] PackageBytes(object package) => Convert.FromBase64String((string)Invoke(package, "GetBase64"));
+    private static string PacketText(object packet) => (string)Invoke(Invoke(packet, "Write"), "GetBase64");
+
+    private static byte[] ReadOpenJournal(string path)
+    {
+        // Share the existing writer while requesting only read access; production
+        // journal sharing/locking remains unchanged.
+        using (FileStream input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        using (MemoryStream output = new MemoryStream())
+        {
+            input.CopyTo(output);
+            return output.ToArray();
+        }
+    }
+
+    private static void WritePackageField(object package, object field)
+    {
+        packageType.GetMethod("Write", AnyInstance, null, new[] { field.GetType() }, null).Invoke(package, new[] { field });
+    }
+
+    private static bool TryReadPacket(Type type, byte[] bytes, out object message)
+    {
+        object[] arguments = { NewPackage(bytes), null };
+        bool result = (bool)type.GetMethod("TryRead", AnyStatic).Invoke(null, arguments);
+        message = arguments[1];
+        return result;
     }
 
     private static void CheckPendingPersistence()

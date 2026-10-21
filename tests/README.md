@@ -1,5 +1,46 @@
 # Regression checks
 
+## Empty consumed Orb identity recovery (2026-10-21)
+
+An empty Orb restored with an already-released identity can recover on its next
+capture attempt. The server requires an intact, matching successful release
+request/result and no conflicting active transaction. The client renews only the
+unique item currently in its inventory, with the same rejected capture request,
+an unchanged empty snapshot, and no staged/committing operation. It changes the
+identity and clears that request's marker, then asks the user to use the Orb again.
+No automatic capture, spawn, item creation, payload restoration, or journal rewrite
+occurs. The old identity remains blocked. A delayed response or reconnect uses the
+existing recovery RPC and binds permission to the exact request bytes.
+
+The new server-only permission is an optional true trailer on a failed capture
+reply. Normal replies and old saved prepared data retain their exact bytes. Old
+clients retain the rejection; old servers do not grant the new permission. Both
+server and client need this patch to recover an affected Orb. A previously released
+animal need not still exist to retire an empty identity; the stronger world-evidence
+requirements for filled/pending Orb outcomes are unchanged.
+
+Validation performed for this patch:
+
+- Debug build with `DeployToGame=true`: zero warnings/errors; final merged plugin
+  copied to the local Steam game's plugins directory and SHA-256 matched.
+- `OrbItemStateChecks`: 88 source-linked fixture checks passed, including slot moves,
+  duplicate IDs, transfers, stale responses, modified contents and committing states.
+- `OrbTransactionChecks`: 143 checks passed on each original Valheim 1.0.20 client
+  and dedicated-server Mono runtime. Includes legacy packet byte preservation,
+  malformed/contradictory permissions, release proof and unchanged journal/replay blocks.
+  Use `run_orb_mono.py` for this runner because packet checks now use game types.
+- `Check-GameApi.ps1`: passed against both original client and dedicated-server DLLs
+  (1,753 direct references, 58 Harmony contracts, 47 private bindings, hotbar fields
+  and 13 dynamic/reflection contracts).
+
+Still required: a disposable host/dedicated world with two clients, testing the
+reported empty stale ID before/after world saves, forced disconnect/reconnect,
+server restart, dropped/duplicated responses, slot/container/drop transfers and
+simultaneous use. Confirm unchanged animal/item counts, one recovery notification,
+and successful explicit recapture with the new ID. This patch does not make
+ServerManager character saves, world saves and the Orb journal atomic, nor recover
+ambiguous filled Orbs. No real multiplayer execution was performed for this patch.
+
 These checks call the built plugin's YAML parser and Orb serializer under .NET Framework 4.8. They do not initialize Unity, install Harmony patches, or run a game server. The test project is separate from the plugin solution and is never included in the mod DLL or release packages.
 
 From PowerShell at the repository root, with the .NET SDK and .NET Framework 4.8 targeting pack installed:

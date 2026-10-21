@@ -371,7 +371,7 @@ internal static partial class TamingOrbSystem
     {
         if (!IsOrbServer() ||
             !OrbCapturePrepared.TryRead(pkg, out OrbCapturePrepared? prepared) ||
-            prepared == null ||
+            prepared == null || prepared.RecoverEmptyOrb ||
             !ServerCaptureTransactions.TryGetValue(prepared.TransactionId, out ServerCaptureTransaction? transaction) ||
             transaction.Phase != OrbCaptureServerPhase.Preparing ||
             !transaction.PrepareOwnerPeerIds.Contains(sender) ||
@@ -425,6 +425,10 @@ internal static partial class TamingOrbSystem
         if (transaction.Phase == OrbCaptureClientPhase.Committing) return;
         if (!prepared.Success)
         {
+            if (prepared.RecoverEmptyOrb && Player.m_localPlayer != null &&
+                Player.m_localPlayer.GetZDOID().Equals(transaction.Request.RequesterId) &&
+                TryRecoverEmptyOrbOnClient(transaction.Request.TransactionId, transaction.Request.OrbId,
+                    transaction.Request.Write().GetBase64())) return;
             FinishCaptureClientFailure(transaction, prepared.Message);
             return;
         }
@@ -1646,6 +1650,7 @@ internal static partial class TamingOrbSystem
         public string Payload { get; set; } = string.Empty;
         public string CreatureManagerState { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
+        public bool RecoverEmptyOrb { get; set; }
 
         public static OrbCapturePrepared Failure(OrbCaptureRequest request, string message)
         {
@@ -1669,6 +1674,9 @@ internal static partial class TamingOrbSystem
             pkg.Write(Payload);
             pkg.Write(CreatureManagerState);
             pkg.Write(Message);
+            // Preserve historical prepared bytes: journal reservations compare them exactly.
+            // Old clients ignore this optional trailer and retain the ordinary rejection.
+            if (RecoverEmptyOrb) pkg.Write(true);
             return pkg;
         }
 
@@ -1688,6 +1696,16 @@ internal static partial class TamingOrbSystem
                     CreatureManagerState = pkg.ReadString(),
                     Message = pkg.ReadString()
                 };
+                if (pkg.GetPos() < pkg.Size())
+                {
+                    message.RecoverEmptyOrb = pkg.ReadByte() == 1;
+                    if (pkg.GetPos() != pkg.Size() || !message.RecoverEmptyOrb || message.Success ||
+                        message.RetryOwner || message.Payload.Length != 0 || message.CreatureManagerState.Length != 0)
+                    {
+                        message = null;
+                        return false;
+                    }
+                }
                 return true;
             }
             catch (Exception)
@@ -1863,6 +1881,23 @@ internal static partial class TamingOrbSystem
         public bool Success { get; init; }
         public ZDOID SpawnedId { get; init; }
         public string Message { get; init; } = string.Empty;
+
+        public static bool IsCompletedReleaseForEmptyOrb(TamingOrbJournal.Entry entry, string orbId)
+        {
+            if (entry.OrbId != orbId || entry.Kind != TamingOrbJournal.Release ||
+                entry.State != TamingOrbJournal.CompletedSuccess ||
+                !Guid.TryParseExact(orbId, "N", out _) || !Guid.TryParseExact(entry.TransactionId, "N", out _)) return false;
+            // No current-world creature proof is needed to retire an EMPTY identity. This
+            // never restores contents or replays a release; their stronger checks stay intact.
+            try
+            {
+                return OrbReleaseRequest.TryRead(new ZPackage(entry.RequestData), out OrbReleaseRequest? request) && request != null &&
+                       request.TransactionId == entry.TransactionId && request.OrbId == orbId &&
+                       TryRead(new ZPackage(entry.ResultData), out OrbReleaseResult? result) && result != null &&
+                       result.TransactionId == entry.TransactionId && result.OrbId == orbId && result.Success && !result.SpawnedId.IsNone();
+            }
+            catch (Exception) { return false; }
+        }
 
         public static OrbReleaseResult SuccessResult(OrbReleaseRequest request, ZDOID spawnedId)
         {

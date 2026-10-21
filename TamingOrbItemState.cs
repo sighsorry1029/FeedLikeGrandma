@@ -108,6 +108,26 @@ internal static partial class TamingOrbSystem
         return match;
     }
 
+    // Only a server-confirmed, rejected capture may retire a consumed empty identity.
+    // Resolve custody again: slot moves clone ItemData, while drops/transfers remove it.
+    private static bool TryRenewEmptyOrbIdentity(Inventory inventory, string txId, string orbId,
+        long worldUid, string requestData)
+    {
+        ItemDrop.ItemData? item = FindPendingOrbItem(inventory, txId, orbId, worldUid);
+        if (item == null || !TryReadPendingOrbItem(item, out OrbPendingItemState? pending) || pending == null ||
+            pending.Action != OrbPendingAction.Capture || pending.Phase != OrbPendingPhase.Preparing ||
+            pending.RequestData != requestData || pending.PreparedData.Length != 0 || pending.SpawnedId.Length != 0 ||
+            pending.Previous.HadPayload || pending.Previous.HadCreatureManagerState ||
+            pending.Previous.Stack != 1 || pending.Previous.Variant != 0 ||
+            !CaptureOrbItemSnapshot(item).Matches(pending.Previous)) return false;
+
+        string freshId = Guid.NewGuid().ToString("N");
+        item.m_customData[OrbIdentityKey] = freshId;
+        item.m_customData.Remove(PendingOrbItemKey);
+        // No contents, quantity, other metadata, or journal receipt is changed.
+        return true;
+    }
+
     private static bool TryFinishPendingOrbItem(
         ItemDrop.ItemData item,
         OrbPendingItemState expected,

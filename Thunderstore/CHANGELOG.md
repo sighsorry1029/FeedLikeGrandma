@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.8
+
+- Recover empty Taming Orbs that still carry an already-released identity after an older item state is restored. On the next capture attempt, the server verifies the completed release and the client assigns a fresh identity to the matching empty Orb. Use the Orb again after the recovery message to capture normally.
+- Keep filled, changed, duplicate-ID, and actively committing Orbs blocked. Recovery preserves the old transaction receipts and does not create creatures or items, restore contents, or automatically retry capture. Lost replies and reconnects use the existing recovery path.
+- Preserve existing Orb payloads, pending-state and journal formats, and the exact bytes of ordinary capture replies. Added an optional server-only recovery permission; update the server and every client together.
+- Added regression checks for item custody, stale responses, packet compatibility and completed-release proof. Checks passed on the original Valheim 1.0.20 client and dedicated-server Mono runtimes; actual multiplayer verification remains pending. Separate character, world and journal saves are still not atomic.
+
 ## 1.1.7
 
 - Fixed feeding and Taming Orb hooks continuing after another Harmony patch had blocked item use. Existing ward restrictions now stop these actions before their side effects.

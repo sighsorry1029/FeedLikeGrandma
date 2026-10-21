@@ -38,6 +38,8 @@ namespace FeedLikeGrandma
                 CheckCaptureRollback();
                 CheckIsolationAndAmbiguity();
                 CheckMutationGuards();
+                CheckEmptyOrbRenewal();
+                CheckEmptyOrbRenewalGuards();
                 Console.WriteLine("Passed " + _passed + " source-linked Orb item-state checks.");
                 Console.WriteLine("Scope: production state helper with plain ItemData/Inventory fixtures; game cloning, Unity, inventory events, and RPC are not executed.");
                 return 0;
@@ -178,6 +180,111 @@ namespace FeedLikeGrandma
             Require(!TryFinishPendingOrbItem(item, state, restorePrevious: true, clearContents: true), "contradictory rollback and clear is rejected");
             item.m_customData[OrbIdentityKey] = Guid.NewGuid().ToString("N");
             Require(!TryFinishPendingOrbItem(item, state, restorePrevious: false, clearContents: true), "changed orb identity protects unrelated replacement contents");
+        }
+
+        private static void CheckEmptyOrbRenewal()
+        {
+            foreach (bool move in new[] { false, true })
+            {
+                ItemDrop.ItemData original = NewOrb(filled: false);
+                OrbPendingItemState state = NewState(original, OrbPendingAction.Capture);
+                Require(TryBeginPendingOrbItem(original, state), "begin rejected capture before empty-ID recovery");
+                Inventory inventory = new();
+                ItemDrop.ItemData current = move ? MoveFixture(original) : original;
+                inventory.Items.Add(current);
+                Require(TryRenewEmptyOrbIdentity(inventory, state.TransactionId, state.OrbId, state.WorldUid, state.RequestData),
+                    move ? "empty-ID recovery follows moved live clone" : "empty-ID recovery renews current inventory item");
+                Require(Guid.TryParseExact(current.m_customData[OrbIdentityKey], "N", out _) &&
+                    current.m_customData[OrbIdentityKey] != state.OrbId && !HasPendingOrbItem(current),
+                    "recovery assigns fresh ID and removes only rejected capture marker");
+                Require(current.m_customData.Count == 2 && current.m_customData["another-mod"] == "preserve" &&
+                    current.m_stack == 1 && current.m_variant == 0 && inventory.Items.Count == 1,
+                    "recovery preserves unrelated metadata, empty contents, stack, and item count");
+                if (move)
+                    Require(original.m_customData[OrbIdentityKey] == state.OrbId && HasPendingOrbItem(original),
+                        "empty-ID recovery leaves stale moved-out reference unchanged");
+                RequireRejectedRenewalUnchanged(inventory, current, state, "duplicate recovery reply is ignored");
+            }
+        }
+
+        private static void CheckEmptyOrbRenewalGuards()
+        {
+            ItemDrop.ItemData item = NewOrb(filled: false);
+            OrbPendingItemState state = NewState(item, OrbPendingAction.Capture);
+            Require(TryBeginPendingOrbItem(item, state), "begin isolated empty-ID recovery fixture");
+            Inventory inventory = new();
+            inventory.Items.Add(item);
+            RequireRejectedRenewalUnchanged(inventory, item, state, "wrong world cannot renew empty ID", worldUid: state.WorldUid + 1);
+            RequireRejectedRenewalUnchanged(inventory, item, state, "different request cannot renew empty ID", requestData: "different-request");
+            RequireRejectedRenewalUnchanged(inventory, item, state, "different transaction cannot renew empty ID", transactionId: Guid.NewGuid().ToString("N"));
+            RequireRejectedRenewalUnchanged(inventory, item, state, "different orb ID cannot renew empty ID", orbId: Guid.NewGuid().ToString("N"));
+
+            ItemDrop.ItemData duplicate = MoveFixture(item);
+            duplicate.m_customData.Remove(PendingOrbItemKey);
+            inventory.Items.Add(duplicate);
+            RequireRejectedRenewalUnchanged(inventory, item, state, "duplicate empty ID without marker blocks renewal");
+            Require(duplicate.m_customData[OrbIdentityKey] == state.OrbId && !HasPendingOrbItem(duplicate),
+                "duplicate item is not rewritten by rejected recovery");
+            inventory.Items.Remove(duplicate);
+            inventory.Items.Clear();
+            RequireRejectedRenewalUnchanged(inventory, item, state, "transferred-out orb cannot be renewed through stale reference");
+            inventory.Items.Add(item);
+
+            state.PreparedData = "prepared-capture";
+            Require(TryUpdatePendingOrbItem(item, state), "prepare nonempty captured-state guard");
+            RequireRejectedRenewalUnchanged(inventory, item, state, "prepared capture data blocks empty-ID renewal");
+            state.Phase = OrbPendingPhase.Committing;
+            Require(TryUpdatePendingOrbItem(item, state), "advance recovery fixture into commit");
+            RequireRejectedRenewalUnchanged(inventory, item, state, "committing capture cannot be retired as empty");
+            item.m_customData[PendingOrbItemKey] = "corrupt-pending";
+            RequireRejectedRenewalUnchanged(inventory, item, state, "malformed marker is preserved rather than cleared");
+            item.m_customData.Remove(PendingOrbItemKey);
+            RequireRejectedRenewalUnchanged(inventory, item, state, "unsolicited recovery without matching marker is ignored");
+
+            foreach (bool mutateBeforeBegin in new[] { true, false })
+            {
+                foreach (var mutation in new (string Name, Action<ItemDrop.ItemData> Change)[]
+                {
+                    ("filled payload", value => value.m_customData[PayloadKey] = "captured-creature"),
+                    ("empty but present payload key", value => value.m_customData[PayloadKey] = ""),
+                    ("creature modifiers", value => value.m_customData[CreatureManagerStateKey] = "modifiers"),
+                    ("empty but present modifier key", value => value.m_customData[CreatureManagerStateKey] = ""),
+                    ("stack count", value => value.m_stack = 2),
+                    ("nonempty icon variant", value => value.m_variant = 1)
+                })
+                {
+                    item = NewOrb(filled: false);
+                    if (mutateBeforeBegin) mutation.Change(item);
+                    state = NewState(item, OrbPendingAction.Capture);
+                    Require(TryBeginPendingOrbItem(item, state), "begin empty recovery content guard: " + mutation.Name);
+                    if (!mutateBeforeBegin) mutation.Change(item);
+                    inventory.Items.Clear();
+                    inventory.Items.Add(item);
+                    RequireRejectedRenewalUnchanged(inventory, item, state,
+                        (mutateBeforeBegin ? "original " : "changed ") + mutation.Name + " blocks renewal without changing item");
+                }
+            }
+
+            item = NewOrb(filled: false);
+            state = NewState(item, OrbPendingAction.Release);
+            Require(TryBeginPendingOrbItem(item, state), "begin release-action recovery guard");
+            inventory.Items.Clear();
+            inventory.Items.Add(item);
+            RequireRejectedRenewalUnchanged(inventory, item, state, "pending release cannot be treated as rejected capture");
+        }
+
+        private static void RequireRejectedRenewalUnchanged(Inventory inventory, ItemDrop.ItemData item,
+            OrbPendingItemState state, string name, long? worldUid = null, string? requestData = null,
+            string? transactionId = null, string? orbId = null)
+        {
+            ItemDrop.ItemData before = MoveFixture(item);
+            bool renewed = TryRenewEmptyOrbIdentity(inventory, transactionId ?? state.TransactionId,
+                orbId ?? state.OrbId, worldUid ?? state.WorldUid, requestData ?? state.RequestData);
+            bool unchanged = before.m_stack == item.m_stack && before.m_variant == item.m_variant &&
+                before.m_customData.Count == item.m_customData.Count;
+            foreach (KeyValuePair<string, string> pair in before.m_customData)
+                unchanged &= item.m_customData.TryGetValue(pair.Key, out string? current) && current == pair.Value;
+            Require(!renewed && unchanged, name);
         }
 
         private static ItemDrop.ItemData NewOrb(bool filled)
