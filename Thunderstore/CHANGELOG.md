@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.10
+
+- Fixed Feed Barrels stopping with `Uninspected patch on ItemDrop.AutoStackItems` when FineDining or another compatible ground-stack transpiler was loaded, including worlds without AzuAutoStore.
+- Replaced the blanket rejection of other merge transpilers with checks of the combined candidate, protection, ownership, quantity and destruction paths. Existing merge callbacks remain in their original order; no mod-name or version allowlist is required. Validation is cached and refreshed when Harmony rebuilds or changes the patches.
+- Keep AzuAutoStore compatibility automatic, with no server protection setting or new RPC. Preserve physical food drops and normal animal feeding, and retain world-item protection on all FLG peers. Invalid or unsupported merge paths still stop new dispensing before stock removal; diagnostics now identify the relevant patch owners and methods.
+- Added composition, cache and failure-path checks using FineDining and the item-data libraries bundled with AzuCraftyBoxes, ValheimCuisine and BetterSleepBruh. Isolated checks passed on original Valheim 1.0.20 client/server Mono runtimes; full plugin startup and actual multiplayer verification remain pending. Update the server and every client together.
+
 ## 1.1.9
 
 - Added optional AzuAutoStore compatibility: food dispensed by a Feed Barrel is excluded from automatic ground collection while animals still walk to and consume the physical food through their normal AI. Ordinary drops, inventory-storage hotkeys, and barrel resupply retain the existing Azu rules; no Azu DLL or YAML edits are required.

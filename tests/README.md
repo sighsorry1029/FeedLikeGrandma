@@ -1,5 +1,103 @@
 # Regression checks
 
+## Automatic ground-stack patch composition (2026-10-27)
+
+Replaces the 1.1.9 blanket rejection of foreign `ItemDrop.AutoStackItems`
+transpilers. This caused Feed Barrels to stop with FineDining even without
+AzuAutoStore. No new configuration, mod-name/version allowlist, or peer-discovery
+RPC was added. Azu's collector hook still activates only where Azu is installed;
+world markers and the small merge filter remain on all FLG peers so a different
+client can own the animal/drop or run Azu.
+
+The guard validates the composed method: one filter immediately after the
+candidate lookup, the unchanged candidate local, null/ownership exits, the
+receiver's stack increment from that candidate, and candidate destruction/save.
+Branches into the protected region and replacement/address-taking of the
+candidate local are rejected. Existing metadata callbacks remain in their
+original order. Other transpiler owners are not a failure condition by themselves.
+Prefixes/postfixes/finalizers and HarmonyX IL manipulators are outside this
+method-body contract and remain unsupported, with their owner/type/method in the
+failure diagnostic. This recognizes a preserved merge structure; it does not
+prove the semantics of arbitrary third-party helper bodies.
+
+Composed IL is checked at installation and after a patch-set change, not for
+every world item/frame. Callback, owner, index, priority, ordering and wrapper
+settings participate in cache comparison. The transpiler also invalidates the
+cache whenever Harmony rebuilds it, including unchanged callback metadata with
+newly emitted IL. Unsupported input is passed through unchanged so FLG does not
+throw from another mod's patch registration; the final validation then rejects
+missing protection before new barrel stock is removed. Cleanup removes only
+FLG's own hook. Existing world items are retained.
+
+The composition runner uses original Valheim 1.0.20 client/server assemblies and
+the installed FineDining 1.1.9, AzuCraftyBoxes 1.8.28, ValheimCuisine 2.3.2 and
+BetterSleepBruh 2.1.2 transpiler bodies. Its external-mod fixtures explicitly
+suppress startup initializers that require the full BepInEx/Unity environment;
+the transpiler/helper IL is retained and game assemblies are never modified or
+publicized. These are isolated composition/detour checks, not full plugin startup,
+actual item transfers or expiry callback execution. In particular, retaining
+FineDining and ItemDataManager callbacks does not certify their metadata policies
+as mutually compatible; this patch only preserves their existing behavior.
+
+Suppressed initializers are `FineDining.FineDiningPlugin::.cctor` (the logging
+reference initializes ServerSync outside a running BepInEx chainloader) and each
+`ItemDataManager.ItemInfo::.cctor` / `Vapok.Common.Managers.ItemInfo::.cctor`
+(registers unrelated Player hooks that require native Unity). The actual merge
+transpiler instruction/operand signatures are checked unchanged in each fixture.
+
+Validation completed:
+
+- Pre-release Debug mod build with `DeployToGame=true` and test-runner builds
+  succeeded with zero warnings/errors. At that validation point, the final
+  merged DLL and local Steam plugins copy matched
+  SHA-256 `1B6A2101757262667D7C48DB5A66099E21E9D3EA8E5C9029D73E09C6D4FAF060`.
+- Original client and dedicated-server Mono each passed 32 Azu contract/IL checks
+  and 107 composition/cache/mutation checks. Covers both insertion orders for
+  each external transpiler and the full combination, equality of the foreign IL
+  pipeline after removing only FLG's two inserted instructions, arbitrary owner
+  names, cache reuse/invalidation, removed filters, and null/ownership bypasses.
+- Source-linked marker/merge policy: 24 checks passed; surface/dispensing: 48.
+- Final merged DLL API/IL checks passed on both original game assemblies: 1,766
+  direct references, 58 explicit Harmony contracts, 47 existing private bindings,
+  hotbar fields and 13 dynamic contracts. The new binding/merge path is checked
+  separately by the original-Mono runner.
+
+Release 1.1.10 validation on 2026-10-27:
+
+- Normal Release build succeeded with zero warnings/errors. Assembly version
+  `1.1.10.0`, BepInPlugin version and manifest version `1.1.10` agree. BepInExPack
+  remains `5.4.2351`, and there is no hard AzuAutoStore assembly reference.
+- Thunderstore ZIP: exactly six intended files; Nexus ZIP: only the plugin DLL.
+  Every packaged file matches its source bytes. The final Release DLL and local
+  Steam plugins copy match SHA-256
+  `3C82EFECD817ECC53EC7ECCCCCE6EC9C39FC9D2EDA29592924F97A019DBBA20B`.
+- Final Release passed the same client/server API checks, 32 contract/IL checks
+  and 107 composition checks on each original Mono runtime. Existing source-linked
+  surface/dispense and marker-policy runners passed 48 and 24 checks respectively.
+  The isolated-fixture and actual-runtime limits described above still apply.
+
+Inspected external DLL SHA-256 values (identification only, no runtime hash gate):
+
+- FineDining: `897D0B165D150ADA9B9CF1C5A80DEEE9E5B929CD3CABEB40A4A03B855F7CF2D0`
+- AzuCraftyBoxes: `381883FE4625D1DD119BB425A2F3C7522457FBC08AE1DB60159F8256DE940D6E`
+- ValheimCuisine: `0C2FBCB367F0803E0CAE6368BDEA8CF1A1E06359F0DF5F6874CC55876E1F146F`
+- BetterSleepBruh: `E65AA72F98662854FE822F3952BB0F0243BD6B12CF6198166508499FA830F01A`
+
+Run the existing Azu checks normally, then add the profile plugins directory:
+
+```powershell
+dotnet build tests/AzuCompatibilityChecks.csproj -c Debug
+python tests/run_azu_mono.py <original-game-directory> ./bin/Debug/FeedLikeGrandma.dll <AzuAutoStore.dll> <BepInEx-core-directory> "composition:<profile-plugins-directory>"
+```
+
+Still verify complete plugin startup with the reported mod set, ordinary feeding
+with Azu absent, and normal/marked ground food with Azu present. In host/dedicated
+two-client sessions, use different animal/drop owners, Azu on only one client,
+zone reloads and enough loaded drops to trigger vanilla auto-stacking. Compare
+barrel/ground/chest/consumed totals; verify mixed stacks stay separate, same-state
+stacks retain the other mods' behavior, and ordinary pickup/re-drop is unaffected.
+Actual game/multiplayer execution and performance profiling remain unperformed.
+
 ## Feed Barrel / AzuAutoStore protection (2026-10-26)
 
 The barrel still removes one food, creates a real `ItemDrop`, and returns it to

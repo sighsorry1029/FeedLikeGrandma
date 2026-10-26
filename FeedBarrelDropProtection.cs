@@ -18,6 +18,7 @@ internal static class FeedBarrelDropProtection
     private static Harmony? _harmony;
     private static MethodInfo? _target;
     private static MethodInfo? _transpiler;
+    private static Patches? _validatedPatches;
     private static bool _installed;
     private static string? _failure;
 
@@ -39,19 +40,11 @@ internal static class FeedBarrelDropProtection
                 _target.GetMethodBody()!.ExceptionHandlingClauses.Count != 0)
                 throw new MissingMethodException("ItemDrop.AutoStackItems contract changed.");
 
-            RequireNoPatches(_target);
             ValidateStackBody(PatchProcessor.GetOriginalInstructions(_target));
             _transpiler = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(Transpiler));
             _harmony = new Harmony(HarmonyId);
-            _harmony.Patch(_target, transpiler: new HarmonyMethod(_transpiler));
+            _harmony.Patch(_target, transpiler: new HarmonyMethod(_transpiler) { priority = Priority.Last });
             ValidateInstalledPatch();
-            List<CodeInstruction> patched = PatchProcessor.GetCurrentInstructions(_target);
-            int lookup = FindCandidateLookup(patched);
-            MethodInfo filter = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(FilterStackCandidate));
-            if (patched.Count(instruction => instruction.Calls(filter)) != 1 ||
-                lookup + 2 >= patched.Count || patched[lookup + 1].opcode != OpCodes.Ldarg_0 ||
-                !patched[lookup + 2].Calls(filter))
-                throw new InvalidOperationException("Feed Barrel stack filter was not installed completely.");
             _installed = true;
             _failure = null;
         }
@@ -122,8 +115,19 @@ internal static class FeedBarrelDropProtection
 
     private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
+        // A rebuild can change emitted IL even with identical callback metadata
+        // (for example a foreign transpiler reacting to its own configuration).
+        _validatedPatches = null;
         List<CodeInstruction> code = instructions.ToList();
-        ValidateStackBody(code);
+        try { ValidateStackBody(code); }
+        catch (Exception)
+        {
+            // Harmony can rerun us while another mod registers a later patch.
+            // Leave its input intact instead of failing that mod's startup.
+            // Final composed-code validation rejects a missing guard before
+            // FLG takes any new barrel stock.
+            return code;
+        }
         int lookup = FindCandidateLookup(code);
         MethodInfo filter = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(FilterStackCandidate));
         // The existing null check consumes the filtered result. All ownership,
@@ -155,9 +159,14 @@ internal static class FeedBarrelDropProtection
     private static void ValidateStackBody(List<CodeInstruction> code)
     {
         int lookup = FindCandidateLookup(code);
-        if (lookup + 5 >= code.Count || !code[lookup + 1].IsStloc() ||
-            code[lookup + 1].labels.Count != 0 || code[lookup + 1].blocks.Count != 0)
+        if (lookup + 5 >= code.Count || !code[lookup + 1].IsStloc() || code.Any(instruction => instruction.blocks.Count != 0))
             throw new InvalidOperationException("ItemDrop stack candidate flow changed.");
+        RequireNoEntry(code, lookup + 1, lookup + 5);
+        int candidate = LocalIndex(code[lookup + 1]);
+        if (code.Count(instruction => instruction.IsStloc() && LocalIndex(instruction) == candidate) != 1 ||
+            code.Any(instruction => (instruction.opcode == OpCodes.Ldloca || instruction.opcode == OpCodes.Ldloca_S) &&
+                LocalIndex(instruction) == candidate))
+            throw new InvalidOperationException("ItemDrop stack candidate can be replaced after filtering.");
         MethodInfo equality = AccessTools.DeclaredMethod(typeof(UnityEngine.Object), "op_Equality",
             new[] { typeof(UnityEngine.Object), typeof(UnityEngine.Object) });
         CodeInstruction branch = code[lookup + 5];
@@ -178,6 +187,77 @@ internal static class FeedBarrelDropProtection
             !CallsOnce(typeof(ZNetView), nameof(ZNetView.IsOwner)) ||
             !CallsOnce(typeof(ZNetView), nameof(ZNetView.Destroy)) || !CallsOnce(typeof(ItemDrop), "Save"))
             throw new InvalidOperationException("ItemDrop stack query/ownership/save flow changed.");
+
+        int owner = code.FindIndex(instruction => instruction.operand is MethodInfo method &&
+            method.DeclaringType == typeof(ZNetView) && method.Name == nameof(ZNetView.IsOwner));
+        if (owner < lookup + 8 || owner + 1 >= destroy ||
+            !LoadsCandidate(code[owner - 2], candidate) || !IsField(code[owner - 1], OpCodes.Ldfld, typeof(ItemDrop), "m_nview") ||
+            (code[owner + 1].opcode != OpCodes.Brfalse && code[owner + 1].opcode != OpCodes.Brfalse_S) ||
+            code[owner + 1].operand is not Label ownerSkip || !code[destroy + 1].labels.Contains(ownerSkip) ||
+            !LoadsCandidate(code[destroy - 2], candidate) || !IsField(code[destroy - 1], OpCodes.Ldfld, typeof(ItemDrop), "m_nview"))
+            throw new InvalidOperationException("ItemDrop stack ownership/destruction no longer uses the filtered candidate.");
+        RequireNoEntry(code, owner - 2, owner + 1);
+
+        var stores = code.Select((instruction, index) => (instruction, index))
+            .Where(pair => IsField(pair.instruction, OpCodes.Stfld, typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.m_stack)))
+            .Select(pair => pair.index).ToArray();
+        if (stores.Length != 1 || stores[0] - 8 <= owner + 1 || stores[0] >= destroy)
+            throw new InvalidOperationException("ItemDrop stack quantity update changed.");
+        int add = stores[0] - 8;
+        if (code[add].opcode != OpCodes.Ldarg_0 ||
+            !IsField(code[add + 1], OpCodes.Ldfld, typeof(ItemDrop), nameof(ItemDrop.m_itemData)) ||
+            code[add + 2].opcode != OpCodes.Dup ||
+            !IsField(code[add + 3], OpCodes.Ldfld, typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.m_stack)) ||
+            !LoadsCandidate(code[add + 4], candidate) ||
+            !IsField(code[add + 5], OpCodes.Ldfld, typeof(ItemDrop), nameof(ItemDrop.m_itemData)) ||
+            !IsField(code[add + 6], OpCodes.Ldfld, typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.m_stack)) ||
+            code[add + 7].opcode != OpCodes.Add)
+            throw new InvalidOperationException("ItemDrop stack quantity update no longer uses the filtered candidate.");
+
+        RequireGuardedBranches(code, lookup + 5, lookup + 6, destroy);
+        RequireGuardedBranches(code, owner + 1, owner + 2, destroy);
+    }
+
+    private static bool LoadsCandidate(CodeInstruction instruction, int candidate) =>
+        instruction.IsLdloc() && LocalIndex(instruction) == candidate;
+
+    private static bool IsField(CodeInstruction instruction, OpCode opcode, Type owner, string name) =>
+        instruction.opcode == opcode && instruction.operand is FieldInfo field && field.DeclaringType == owner && field.Name == name;
+
+    private static void RequireNoEntry(List<CodeInstruction> code, int first, int last)
+    {
+        for (int i = first; i <= last; i++)
+            if (code[i].labels.Count != 0)
+                throw new InvalidOperationException("A branch can enter inside an ItemDrop stack guard.");
+    }
+
+    private static void RequireGuardedBranches(List<CodeInstruction> code, int guard, int first, int last)
+    {
+        var protectedLabels = new HashSet<Label>();
+        for (int i = first; i <= last; i++) protectedLabels.UnionWith(code[i].labels);
+        for (int i = 0; i < code.Count; i++)
+        {
+            if (i > guard && i <= last) continue;
+            if ((code[i].operand is Label label && protectedLabels.Contains(label)) ||
+                (code[i].operand is Label[] labels && labels.Any(protectedLabels.Contains)))
+                throw new InvalidOperationException("A branch bypasses the ItemDrop stack candidate/ownership guard.");
+        }
+    }
+
+    private static void ValidateComposedBody(List<CodeInstruction> code)
+    {
+        int lookup = FindCandidateLookup(code);
+        MethodInfo filter = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(FilterStackCandidate));
+        if (code.Count(instruction => instruction.Calls(filter)) != 1 || lookup + 2 >= code.Count ||
+            code[lookup + 1].opcode != OpCodes.Ldarg_0 || !code[lookup + 2].Calls(filter))
+            throw new InvalidOperationException("Feed Barrel stack filter is missing, duplicated or moved.");
+        RequireNoEntry(code, lookup + 1, lookup + 2);
+        if (code[lookup + 1].blocks.Count != 0 || code[lookup + 2].blocks.Count != 0)
+            throw new InvalidOperationException("Feed Barrel stack filter exception flow changed.");
+        // Inspect the combined body, not just vanilla IL or the other mods' names.
+        var withoutFilter = new List<CodeInstruction>(code);
+        withoutFilter.RemoveRange(lookup + 1, 2);
+        ValidateStackBody(withoutFilter);
     }
 
     private static int LocalIndex(CodeInstruction instruction)
@@ -189,20 +269,57 @@ internal static class FeedBarrelDropProtection
         return instruction.operand is LocalVariableInfo local ? local.LocalIndex : Convert.ToInt32(instruction.operand);
     }
 
-    private static void RequireNoPatches(MethodInfo target)
-    {
-        Patches? patches = Harmony.GetPatchInfo(target);
-        if (patches != null && patches.Owners.Any())
-            throw new InvalidOperationException("Uninspected patch on ItemDrop.AutoStackItems.");
-    }
-
     private static void ValidateInstalledPatch()
     {
         Patches? patches = _target == null ? null : Harmony.GetPatchInfo(_target);
-        if (patches == null || patches.Prefixes.Count != 0 || patches.Postfixes.Count != 0 ||
-            patches.Finalizers.Count != 0 || patches.Transpilers.Count != 1 ||
-            patches.Transpilers[0].owner != HarmonyId || patches.Transpilers[0].PatchMethod != _transpiler)
-            throw new InvalidOperationException("Feed Barrel stack guard changed or is incomplete.");
+        try
+        {
+            // GetCurrentInstructions covers transpilers, not wrapper callbacks or
+            // HarmonyX IL manipulators. Do not silently approve an unseen route.
+            if (patches == null || patches.Prefixes.Count != 0 || patches.Postfixes.Count != 0 ||
+                patches.Finalizers.Count != 0 || patches.ILManipulators.Count != 0 ||
+                patches.Transpilers.Count(patch => patch.owner == HarmonyId) != 1 ||
+                !patches.Transpilers.Any(patch => patch.owner == HarmonyId && patch.PatchMethod == _transpiler))
+                throw new InvalidOperationException("Unsupported wrapper or incomplete Feed Barrel stack guard.");
+            if (_validatedPatches != null && SameTranspilers(_validatedPatches, patches)) return;
+            ValidateComposedBody(PatchProcessor.GetCurrentInstructions(_target!));
+            _validatedPatches = patches;
+        }
+        catch (Exception error)
+        {
+            _validatedPatches = null;
+            throw new InvalidOperationException(error.Message + " Patches: " + DescribePatches(patches), error);
+        }
+    }
+
+    private static bool SameTranspilers(Patches previous, Patches current)
+    {
+        if (previous.Transpilers.Count != current.Transpilers.Count) return false;
+        for (int i = 0; i < previous.Transpilers.Count; i++)
+        {
+            Patch left = previous.Transpilers[i], right = current.Transpilers[i];
+            if (left.index != right.index || left.owner != right.owner || left.PatchMethod != right.PatchMethod ||
+                left.priority != right.priority || left.wrapTryCatch != right.wrapTryCatch ||
+                !left.before.SequenceEqual(right.before) || !left.after.SequenceEqual(right.after)) return false;
+        }
+        return true;
+    }
+
+    private static string DescribePatches(Patches? patches)
+    {
+        if (patches == null) return "none";
+        var entries = new List<string>();
+        void Add(string kind, IEnumerable<Patch> list)
+        {
+            foreach (Patch patch in list)
+                entries.Add(kind + " " + patch.owner + ":" + patch.PatchMethod.DeclaringType?.FullName + "." + patch.PatchMethod.Name);
+        }
+        Add("prefix", patches.Prefixes);
+        Add("transpiler", patches.Transpilers);
+        Add("postfix", patches.Postfixes);
+        Add("finalizer", patches.Finalizers);
+        Add("IL manipulator", patches.ILManipulators);
+        return string.Join("; ", entries);
     }
 
     private static void BlockDispensing(string reason)
@@ -216,6 +333,7 @@ internal static class FeedBarrelDropProtection
     private static void RemoveOwnPatch()
     {
         _installed = false;
+        _validatedPatches = null;
         try
         {
             _harmony?.UnpatchSelf();

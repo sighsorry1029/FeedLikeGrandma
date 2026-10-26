@@ -41,6 +41,11 @@ internal static class AzuCompatibilityChecks
         Assembly flg = Assembly.LoadFrom(args[0]);
         _bridge = flg.GetType("FeedLikeGrandma.FeedAzuAutoStoreCompatibility", true);
         _protection = flg.GetType("FeedLikeGrandma.FeedBarrelDropProtection", true);
+        if (args[4].StartsWith("compose:", StringComparison.Ordinal))
+        {
+            string[] parts = args[4].Split(new[] { ':' }, 3);
+            return AzuStackCompositionChecks.Run(_protection, parts[1], parts[2]);
+        }
         if (args[4] != "original") return CheckVariant(args[1], args[4]);
         Assembly azu = Assembly.LoadFrom(args[1]);
         MethodInfo[] methods = Bind(azu);
@@ -99,6 +104,7 @@ internal static class AzuCompatibilityChecks
         MethodInfo target = AccessTools.DeclaredMethod(typeof(ItemDrop), "AutoStackItems", Type.EmptyTypes);
         List<CodeInstruction> original = PatchProcessor.GetOriginalInstructions(target);
         MethodInfo filter = _protection.GetMethod("FilterStackCandidate", All);
+        ValidateUnfiltered(original);
         List<CodeInstruction> patched = Transpile(original);
         Require(patched.Count == original.Count + 2 && patched.Count(instruction => instruction.Calls(filter)) == 1,
             "actual game stack IL receives exactly one two-instruction filter");
@@ -109,12 +115,32 @@ internal static class AzuCompatibilityChecks
         Require(withoutInjection.SequenceEqual(original), "all original instruction objects/labels, ownership, quantity, save and destroy flow are retained");
         Require(patched.Count(instruction => instruction.operand is MethodInfo method && method.DeclaringType == typeof(UnityEngine.Physics) &&
             method.Name == "OverlapSphere") == 1, "filter adds no physics scan");
-        Reject(() => Transpile(original.Where(instruction => !ReferenceEquals(instruction, patched[injected - 2]))), "missing lookup rejected before mutation");
-        Reject(() => Transpile(original.Concat(new[] { patched[injected - 2] })), "ambiguous lookup rejected before mutation");
-        Reject(() => Transpile(patched), "second installation is rejected instead of duplicating filter");
+        var missingLookup = original.Where(instruction => !ReferenceEquals(instruction, patched[injected - 2])).ToList();
+        Reject(() => ValidateUnfiltered(missingLookup), "missing lookup rejected by structural validator");
+        Reject(() => ValidateUnfiltered(original.Concat(new[] { patched[injected - 2] })), "ambiguous lookup rejected by structural validator");
+        Reject(() => ValidateUnfiltered(patched), "already filtered input is not a second insertion site");
+        Require(Transpile(missingLookup).SequenceEqual(missingLookup), "unrecognized input is returned intact instead of breaking another owner's patch registration");
+        ValidateComposed(patched); Require(true, "valid composed filter and vanilla path are accepted");
+        Reject(() => ValidateComposed(original), "composed path without FLG filter is rejected");
+        var duplicateFilter = patched.Select(instruction => new CodeInstruction(instruction)).ToList();
+        duplicateFilter.InsertRange(injected + 1, new[] { new CodeInstruction(OpCodes.Ldarg_0), new CodeInstruction(OpCodes.Call, filter) });
+        Reject(() => ValidateComposed(duplicateFilter), "duplicate FLG candidate filters are rejected");
         var reversedGuard = original.Select(instruction => new CodeInstruction(instruction)).ToList();
         reversedGuard[injected - 2 + 5].opcode = OpCodes.Brfalse;
-        Reject(() => Transpile(reversedGuard), "reversed candidate null branch rejected");
+        Reject(() => ValidateUnfiltered(reversedGuard), "reversed candidate null branch rejected");
+        var reversedOwner = original.Select(instruction => new CodeInstruction(instruction)).ToList();
+        int ownerCall = reversedOwner.FindIndex(instruction => instruction.operand is MethodInfo method &&
+            method.DeclaringType == typeof(ZNetView) && method.Name == "IsOwner");
+        reversedOwner[ownerCall + 1].opcode = OpCodes.Brtrue;
+        Reject(() => ValidateUnfiltered(reversedOwner), "reversed ownership branch rejected");
+        var bypassOwner = original.Select(instruction => new CodeInstruction(instruction)).ToList();
+        var generator = new DynamicMethod("stack_guard_labels", typeof(void), Type.EmptyTypes).GetILGenerator();
+        var existingLabels = new HashSet<Label>(original.SelectMany(instruction => instruction.labels));
+        Label bypass;
+        do { bypass = generator.DefineLabel(); } while (existingLabels.Contains(bypass));
+        bypassOwner[ownerCall + 2].labels.Add(bypass);
+        bypassOwner.Insert(injected - 2 + 6, new CodeInstruction(OpCodes.Br, bypass));
+        Reject(() => ValidateUnfiltered(bypassOwner), "branch into post-ownership pre-increment region is rejected");
         const string protectionId = "sighsorry.FeedLikeGrandma.FeedBarrelDrops";
         var harmony = new Harmony(protectionId);
         try
@@ -193,6 +219,10 @@ internal static class AzuCompatibilityChecks
     private static void Set(string name, object value) => _bridge.GetField(name, All).SetValue(null, value);
     private static List<CodeInstruction> Transpile(IEnumerable<CodeInstruction> code) =>
         ((IEnumerable<CodeInstruction>)_protection.GetMethod("Transpiler", All).Invoke(null, new object[] { code })).ToList();
+    private static void ValidateUnfiltered(IEnumerable<CodeInstruction> code) =>
+        _protection.GetMethod("ValidateStackBody", All).Invoke(null, new object[] { code.ToList() });
+    private static void ValidateComposed(IEnumerable<CodeInstruction> code) =>
+        _protection.GetMethod("ValidateComposedBody", All).Invoke(null, new object[] { code.ToList() });
     private static void Reject(Action action, string message)
     {
         try { action(); } catch (TargetInvocationException error) when (error.InnerException is InvalidOperationException || error.InnerException is MissingMemberException) { _passed++; return; }

@@ -20,6 +20,7 @@
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(CorlibPath)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(CorlibPath)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
     <Compile Include="AzuCompatibilityChecks.cs" />
+    <Compile Include="AzuStackCompositionChecks.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

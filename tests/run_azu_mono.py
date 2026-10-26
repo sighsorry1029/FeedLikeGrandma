@@ -1,4 +1,9 @@
-"""Run Azu compatibility contract/IL checks in original Mono, without a world or Unity lifecycle."""
+"""Run Azu contract/IL checks in original Mono, without a world or Unity lifecycle.
+
+Optional composition:<plugins-directory> checks the installed FineDining and
+ItemDataManager transpiler bodies through explicit startup-suppressed fixtures.
+Use '-' for the Azu DLL argument in that mode; Azu need not be installed there.
+"""
 import ctypes
 import os
 from pathlib import Path
@@ -6,7 +11,15 @@ import sys
 import subprocess
 
 if len(sys.argv) not in (5, 6):
-    raise SystemExit("Usage: python run_azu_mono.py <original-game-dir> <FeedLikeGrandma.dll> <AzuAutoStore.dll> <BepInEx-core-dir>")
+    raise SystemExit("Usage: python run_azu_mono.py <original-game-dir> <FeedLikeGrandma.dll> <AzuAutoStore.dll> <BepInEx-core-dir> [composition:<plugin-directory>]")
+if len(sys.argv) == 6 and sys.argv[5].startswith("composition:"):
+    profile = sys.argv[5][len("composition:"):]
+    for case in ("fine-first", "fine-last", "crafty-first", "crafty-last", "cuisine-first", "cuisine-last",
+                 "sleep-first", "sleep-last", "combined-first", "combined-last", "mutations"):
+        result = subprocess.run([sys.executable, __file__, *sys.argv[1:5], "compose:" + case + ":" + profile])
+        if result.returncode:
+            raise SystemExit(result.returncode)
+    raise SystemExit(0)
 if len(sys.argv) == 5:
     # Harmony's generic operand cache is process-wide and may conflate identical
     # full type names in synthetic assembly copies. Bind each variant in a fresh
@@ -22,7 +35,8 @@ if not managed.is_dir():
     managed = game / "valheim_server_Data" / "Managed"
 runtime = game / "MonoBleedingEdge"
 runner = Path(__file__).resolve().parent / "bin" / "azu-compatibility" / "AzuCompatibilityChecks.exe"
-if not managed.is_dir() or not all(path.is_file() for path in (runner, flg, azu)):
+is_composition = sys.argv[5].startswith("compose:")
+if not managed.is_dir() or not all(path.is_file() for path in (runner, flg)) or (not is_composition and not azu.is_file()):
     raise SystemExit("Original Managed directory or built test/input DLL was not found")
 
 dll_directory = os.add_dll_directory(str(runtime / "EmbedRuntime"))
