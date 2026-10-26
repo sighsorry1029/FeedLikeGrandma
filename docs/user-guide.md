@@ -183,6 +183,12 @@ This approach keeps the visible eating animation and normal pathfinding behavior
 
 Food can be placed on terrain or building floors. Nearby drop points must have a solid surface within 1 metre above or below the creature's feet and pass its normal path check. Keep the barrel and animal near the same floor height; unsupported edges and larger height differences are skipped instead of dropping food onto distant terrain below.
 
+When AzuAutoStore is installed, food dispensed by the Feed Barrel is excluded from its automatic ground collection. The animal still walks to the actual food and consumes it through its normal AI. Ordinary dropped items, Azu's inventory-storage hotkeys, and automatic supplies put into the barrel follow the existing Azu settings. No Azu DLL or YAML change is required.
+
+Protection belongs to that world item, not its inventory data. It survives world saves, zone reloads and ownership changes; after a player picks the food up, dropping it again creates an ordinary item. Newly dispensed food is marked on every FLG peer, including a server without Azu, because another client can perform automatic collection. Protected and ordinary world stacks are kept separate; two protected stacks or two ordinary stacks still use the game's normal merging rules. Existing unmarked food already lying on the ground is not retroactively classified as barrel food.
+
+Install the same patched FLG build on the server and every client. Azu ground collection runs on clients, so updating only the dedicated server is insufficient. The inspected Azu DLL is 3.1.7; activation checks the required collection methods and installed patches rather than requiring that version or DLL hash. If the required collection or merge contract cannot be established, FLG logs the reason and stops new local barrel dispensing before taking stock. Manual feeding and ordinary storage remain available. Runtime DLL replacement is unsupported.
+
 The Feed Barrel appears in the Hammer's Misc category. Its recipe, material, columns, and rows are configurable. The default inventory is 6 by 2 and the default material uses `ectoplasm_mat`.
 
 Default recipe:

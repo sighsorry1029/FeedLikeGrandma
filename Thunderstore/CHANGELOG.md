@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.9
+
+- Added optional AzuAutoStore compatibility: food dispensed by a Feed Barrel is excluded from automatic ground collection while animals still walk to and consume the physical food through their normal AI. Ordinary drops, inventory-storage hotkeys, and barrel resupply retain the existing Azu rules; no Azu DLL or YAML edits are required.
+- Keep protection on the world item and prevent automatic merging between protected and ordinary food stacks. Picking food up and dropping it again creates an ordinary drop. Existing unmarked ground food is unchanged. No additional world scan, physics query, per-frame loop, or RPC was added.
+- Check the required Azu collection routes and active patches instead of requiring a fixed version or DLL hash. An unrecognized collection or merging contract pauses new local Feed Barrel dispensing before stock removal and logs the reason; normal manual feeding and storage remain available. The inspected AzuAutoStore version is 3.1.7.
+- Update the server and every client together, including clients that perform Azu ground collection. Added focused dispensing, marker, and compatibility checks, including installation of the actual merge transpiler on original Valheim 1.0.20 client/server Mono runtimes. Actual game and multiplayer verification remains pending.
+
 ## 1.1.8
 
 - Recover empty Taming Orbs that still carry an already-released identity after an older item state is restored. On the next capture attempt, the server verifies the completed release and the client assigns a fresh identity to the matching empty Orb. Use the Orb again after the recovery message to capture normally.

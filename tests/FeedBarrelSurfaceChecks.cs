@@ -20,6 +20,7 @@ internal static class FeedBarrelSurfaceChecks
             CheckObstructions();
             CheckRangeAndPath();
             CheckStockAndTargets();
+            CheckCompatibilityBoundary();
             Console.WriteLine("Passed " + _passed + " source-linked Feed Barrel surface checks.");
             Console.WriteLine("Scope: geometric plane fixtures and inventory counters; Unity collider behavior, NavMesh, ownership transport, and actual game feeding were not executed.");
             return 0;
@@ -157,6 +158,32 @@ internal static class FeedBarrelSurfaceChecks
     private static bool FindFood(Fixture fixture, out ItemDrop? target) =>
         FeedLikeGrandma.FeedAutoFeedSystem.TryFindClosestConsumableFromFeedBarrel(fixture.Animal, 10f, out target);
 
+    private static void CheckCompatibilityBoundary()
+    {
+        Fixture fixture = NewFixture(0f); AddPlane(0f, "terrain");
+        FeedLikeGrandma.FeedBarrelDropProtection.Ready = false;
+        Require(!FindFood(fixture, out ItemDrop? target), "unavailable merge protection prevents dispensing");
+        RequireNoStockChange(fixture, target, "unavailable merge protection");
+
+        fixture = NewFixture(0f); AddPlane(0f, "terrain");
+        FeedLikeGrandma.FeedAzuAutoStoreCompatibility.Allowed = false;
+        Require(!FindFood(fixture, out target), "incompatible Azu contract prevents dispensing");
+        RequireNoStockChange(fixture, target, "incompatible Azu contract");
+
+        fixture = NewFixture(0f); AddPlane(0f, "terrain");
+        Require(FindFood(fixture, out target), "ready compatibility retains physical food target");
+        Require(FeedLikeGrandma.FeedBarrelDropProtection.MarkCalls == 1 &&
+            ReferenceEquals(FeedLikeGrandma.FeedBarrelDropProtection.LastMarked, target), "spawned target is marked exactly once before lookup returns");
+
+        fixture = NewFixture(0f); AddPlane(0f, "terrain");
+        FeedLikeGrandma.FeedBarrelDropProtection.MarkSucceeds = false;
+        Require(FindFood(fixture, out target) && target != null && fixture.Food.m_stack == 2 &&
+            ItemDrop.DropCalls == 1 && fixture.Barrel.Inventory.RemoveCalls == 1,
+            "post-spawn marker failure retains one original food without refund or second spawn");
+        Require(!FindFood(fixture, out _) && fixture.Food.m_stack == 2 && ItemDrop.DropCalls == 1,
+            "latched marker failure prevents additional stock removal on the next attempt");
+    }
+
     private static void RequireNoStockChange(Fixture fixture, ItemDrop? target, string label)
     {
         Require(target == null && fixture.Food.m_stack == 3 && fixture.Barrel.Inventory.RemoveCalls == 0 &&
@@ -177,6 +204,11 @@ internal static class FeedBarrelSurfaceChecks
         Physics.Planes.Clear();
         Physics.RaycastCalls = 0;
         ItemDrop.DropCalls = 0;
+        FeedLikeGrandma.FeedBarrelDropProtection.Ready = true;
+        FeedLikeGrandma.FeedBarrelDropProtection.MarkSucceeds = true;
+        FeedLikeGrandma.FeedBarrelDropProtection.MarkCalls = 0;
+        FeedLikeGrandma.FeedBarrelDropProtection.LastMarked = null;
+        FeedLikeGrandma.FeedAzuAutoStoreCompatibility.Allowed = true;
         MonsterAI animal = new();
         animal.transform.position = new Vector3(3f, height, 0f);
         animal.gameObject.AddComponent(new ZNetView());
@@ -385,6 +417,20 @@ internal sealed class ObjectDB
 }
 namespace FeedLikeGrandma
 {
+    internal static class FeedBarrelDropProtection
+    {
+        internal static bool Ready = true, MarkSucceeds = true;
+        internal static int MarkCalls;
+        internal static ItemDrop? LastMarked;
+        internal static bool IsReady(out string? reason) { reason = Ready ? null : "fixture merge protection unavailable"; return Ready; }
+        internal static bool Mark(ItemDrop? item)
+        { MarkCalls++; LastMarked = item; if (!MarkSucceeds) Ready = false; return MarkSucceeds; }
+    }
+    internal static class FeedAzuAutoStoreCompatibility
+    {
+        internal static bool Allowed = true;
+        internal static bool CanDispense(out string? reason) { reason = Allowed ? null : "fixture Azu contract unavailable"; return Allowed; }
+    }
     internal static class FeedBarrelSystem
     {
         public static bool IsEnabled => true;

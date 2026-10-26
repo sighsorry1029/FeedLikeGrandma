@@ -31,10 +31,11 @@ internal enum RuntimeRefreshFlags
 [BepInDependency("Raelaziel.OdinHorse", BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency(FeedCuisineCompatibility.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
 [BepInDependency(FeedWardCompatibility.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency(FeedAzuAutoStoreCompatibility.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.1.8";
+    internal const string ModVersion = "1.1.9";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -172,6 +173,15 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         }
     }
 
+    private void Start()
+    {
+        if (_isShuttingDown) return;
+        // Resolve optional mods after their Awake registrations. The merge boundary
+        // is needed on every peer: Azu may run only on a different client.
+        FeedBarrelDropProtection.Initialize();
+        FeedAzuAutoStoreCompatibility.Initialize();
+    }
+
     private void OnDestroy()
     {
         ShutdownRuntime();
@@ -229,6 +239,8 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         FeedBetterRidingCompatibility.Shutdown();
         FeedDragonFlightRestrictionSystem.Shutdown();
         FeedRidingSystem.Shutdown();
+        FeedAzuAutoStoreCompatibility.Shutdown();
+        FeedBarrelDropProtection.Shutdown();
         FeedAutoFeedSystem.Shutdown();
         FeedProcreationSystem.Shutdown();
         FeedSystem.Shutdown();

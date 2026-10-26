@@ -128,6 +128,8 @@
         <Compile Include="FeedConsoleCommands.cs"/>
         <Compile Include="GameAccess.cs"/>
         <Compile Include="FeedAutoFeedSystem.cs"/>
+        <Compile Include="FeedAzuAutoStoreCompatibility.cs"/>
+        <Compile Include="FeedBarrelDropProtection.cs"/>
         <Compile Include="FeedBarrelSystem.cs"/>
         <Compile Include="FeedBetterRidingCompatibility.cs"/>
         <Compile Include="FeedConfig.cs"/>

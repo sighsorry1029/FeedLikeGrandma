@@ -169,6 +169,12 @@ internal static class FeedAutoFeedSystem
     private static bool TryRemoveAndDrop(Container container, ItemDrop.ItemData item, Vector3 dropPosition, out ItemDrop? droppedItem)
     {
         droppedItem = null;
+        // Check compatibility before taking ownership or removing any stock.
+        if (!FeedBarrelDropProtection.IsReady(out _) || !FeedAzuAutoStoreCompatibility.CanDispense(out _))
+        {
+            return false;
+        }
+
         Inventory? inventory = container.GetInventory();
         ZNetView? containerView = container.NetworkView();
         if (inventory == null || containerView == null || !containerView.IsValid())
@@ -195,6 +201,13 @@ internal static class FeedAutoFeedSystem
 
         container.Save();
         droppedItem = ItemDrop.DropItem(dropData, 1, dropPosition, ((Component)container).transform.rotation);
+        if (droppedItem != null)
+        {
+            // Mark only this world drop, never the reusable inventory ItemData.
+            // A marking failure blocks later dispensing; keep the already-created
+            // food available to the animal instead of destroying or recreating it.
+            FeedBarrelDropProtection.Mark(droppedItem);
+        }
         return droppedItem != null;
     }
 

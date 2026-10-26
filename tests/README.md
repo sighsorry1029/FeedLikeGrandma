@@ -1,5 +1,105 @@
 # Regression checks
 
+## Feed Barrel / AzuAutoStore protection (2026-10-26)
+
+The barrel still removes one food, creates a real `ItemDrop`, and returns it to
+the animal's normal walking/consumption flow. Its owner adds only the world-ZDO
+boolean `flg.feedbarrel.food.v1`; inventory custom data and shared prefab data are
+unchanged. A prefix on Azu's ground-store entry skips marked drops before storage
+or ownership requests. Inventory hotkeys and destination-container rules are
+unchanged. The existing vanilla stack loop skips mixed marked/unmarked pairs in
+both directions, retaining normal rules for pairs with the same protection state.
+No additional world scan, physics query, polling loop, or RPC was added.
+
+The original inspected AzuAutoStore DLL is 3.1.7, SHA-256
+`A609E7209832FB96AF11FE3A0F6C499D4ED54F599289D23DF0826A51BDE640EE`.
+The original Valheim 1.0.20 client (25909357) and dedicated server (25909431)
+assemblies are the game validation inputs. None were publicized or changed.
+The Azu version/hash identify the sample, not an activation whitelist. Startup
+checks the relevant collection routes and original stack-loop shape; each new
+dispense checks the installed patch set before ownership or stock removal. A
+matching structure is not proof that an arbitrary future implementation has
+identical semantics. Unknown patches on these boundaries stop new local barrel
+dispensing with a logged reason; normal manual feeding/storage remains available.
+If marking an already-created drop fails, it is retained without refunding or
+spawning a replacement, and subsequent dispensing stops.
+
+Reproduce the focused checks with:
+
+```powershell
+dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true
+dotnet build tests/FeedBarrelSurfaceChecks.csproj -c Debug
+./tests/bin/feed-barrel-surface/FeedBarrelSurfaceChecks.exe
+dotnet build tests/AzuDropProtectionChecks.csproj -c Debug
+./tests/bin/azu-drop-protection/AzuDropProtectionChecks.exe
+dotnet build tests/AzuCompatibilityChecks.csproj -c Debug
+python tests/run_azu_mono.py <original-game-directory> ./bin/Debug/FeedLikeGrandma.dll <AzuAutoStore.dll> <BepInEx-core-directory>
+```
+
+The surface and marker runners use synthetic world/geometry/inventory objects.
+The original-Mono runner loads actual assemblies and uses explicitly modified
+in-memory Azu copies only to test compatibility acceptance/rejection. These are
+not physical feeding, ZDO replication, or multiplayer tests.
+
+Validation results:
+
+- Pre-release Debug build/deploy and all three test-runner builds: zero
+  warnings/errors. At that validation point, the final merged DLL and the local
+  Steam `BepInEx/plugins/FeedLikeGrandma.dll` both had SHA-256
+  `6BB50DF16EDE912D81793DEC2EF3091923E073E15DF7D9E22B0CE808348C0F45`.
+- Surface/dispense runner: 48 checks passed; marker/merge policy runner: 24 passed.
+- Original client and dedicated-server Mono: 26 checks passed on each. These
+  cover actual Azu binding, harmless version/MVID/instruction-offset changes,
+  rejected retry/RPC/partial-patch changes, and actual installation/readback/
+  removal of the production transpiler on original `ItemDrop.AutoStackItems`.
+  Removal ownership is checked with static cleanup IL and isolated Harmony
+  targets; complete plugin `Start`/`Initialize`/`Shutdown` was not executed.
+  Standalone Mono lacks the initialized BepInEx/ServerSync/Unity lifecycle.
+- Final merged DLL API/IL checks passed against both original client and server:
+  1,763 direct game references, 58 explicit Harmony contracts, 47 existing
+  cached private bindings, hotbar fields, and 13 dynamic/reflection contracts.
+  The new `ItemDrop.m_nview` private binding is additionally checked by the
+  original-Mono runner, not included in the 47 existing bindings above.
+
+Release 1.1.9 validation on 2026-10-26:
+
+- `dotnet build FeedLikeGrandma.csproj -c Release` succeeded with zero
+  warnings/errors. The assembly version is `1.1.9.0`, the package version is
+  `1.1.9`, and the manifest retains BepInExPack Valheim `5.4.2351`.
+- The Thunderstore ZIP contains exactly the six intended files, and the Nexus
+  ZIP contains only the plugin DLL. Every packaged file matches its source bytes.
+  The final Release DLL and the installed local Steam DLL match SHA-256
+  `B40DAF38A4000E9DAEAC1B15F61BEE15986BE5E5419080E27F75C0A8AF2D5E85`.
+- The final Release DLL passed the same client/server API checks and 26 original
+  Mono checks on each platform. The existing source-linked runners passed
+  48 surface/dispense checks and 24 marker/merge policy checks again.
+
+Still required in a disposable host and dedicated world with two clients, all
+using this patched FLG build:
+
+1. With Azu absent and present, feed a hungry calm animal from a closed barrel on
+   terrain and a building floor. Count barrel, ground, consumed, and nearby-chest
+   food. Azu must leave new barrel food available to the normal animal AI while
+   still collecting ordinary dropped food under its existing settings.
+2. Test both creature/barrel ownership arrangements, Azu on only one client,
+   ownership transfer, zone unload/reload, and world save/server restart. Check
+   retained markers and unchanged item totals; a server-only update is insufficient.
+3. With enough loaded drops to trigger vanilla auto-stacking (more than 200),
+   test both receiver directions for marked/unmarked food, marked/marked food,
+   and ordinary/ordinary food. Mixed stacks must remain separate. Other pairs
+   must preserve vanilla quality/capacity/ownership rules and total counts.
+4. Pick up marked food and drop it again: the new world item must be ordinary.
+   Check partial pickup, inventory hotkeys, and barrel resupply. Food already on
+   the ground before the patch remains unmarked; use a newly dispensed item.
+5. Verify startup compatibility logs and unchanged behavior with the surrounding
+   mod set. Test a rejected route/patch contract in a disposable configuration:
+   no new barrel stock may be removed, and normal storage/manual feeding must
+   continue. Compare initialization order; runtime DLL replacement is unsupported.
+
+No actual game/host/dedicated multiplayer execution or performance profiling was
+performed for this patch. Build and automated results are recorded separately
+from these remaining runtime checks.
+
 ## Empty consumed Orb identity recovery (2026-10-21)
 
 An empty Orb restored with an already-released identity can recover on its next
