@@ -21,6 +21,7 @@
     <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(CorlibPath)\UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
     <Compile Include="AzuCompatibilityChecks.cs" />
     <Compile Include="AzuStackCompositionChecks.cs" />
+    <Compile Include="EpicLootStackChecks.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

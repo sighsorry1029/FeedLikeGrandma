@@ -41,6 +41,11 @@ internal static class AzuCompatibilityChecks
         Assembly flg = Assembly.LoadFrom(args[0]);
         _bridge = flg.GetType("FeedLikeGrandma.FeedAzuAutoStoreCompatibility", true);
         _protection = flg.GetType("FeedLikeGrandma.FeedBarrelDropProtection", true);
+        if (args[4].StartsWith("epic:", StringComparison.Ordinal))
+        {
+            string[] parts = args[4].Split(new[] { ':' }, 3);
+            return EpicLootStackChecks.Run(flg, parts[1], parts[2], args[1]);
+        }
         if (args[4].StartsWith("compose:", StringComparison.Ordinal))
         {
             string[] parts = args[4].Split(new[] { ':' }, 3);

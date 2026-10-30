@@ -14,6 +14,7 @@ internal static class FeedBarrelDropProtection
 {
     private const string HarmonyId = "sighsorry.FeedLikeGrandma.FeedBarrelDrops";
     private static readonly int MarkerHash = "flg.feedbarrel.food.v1".GetStableHashCode();
+    private static readonly MethodInfo FilterMethod = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(FilterStackCandidate));
     private static AccessTools.FieldRef<ItemDrop, ZNetView>? _networkView;
     private static Harmony? _harmony;
     private static MethodInfo? _target;
@@ -25,6 +26,11 @@ internal static class FeedBarrelDropProtection
     internal static void Initialize()
     {
         Shutdown();
+        if (_harmony != null || FeedEpicLootStackCompatibility.IsInstalled)
+        {
+            BlockDispensing("Previous Feed Barrel stack guard could not be removed; restart required.");
+            return;
+        }
         try
         {
             // ItemDrop has no public ZNetView getter. Cache its original private
@@ -44,7 +50,9 @@ internal static class FeedBarrelDropProtection
             _transpiler = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(Transpiler));
             _harmony = new Harmony(HarmonyId);
             _harmony.Patch(_target, transpiler: new HarmonyMethod(_transpiler) { priority = Priority.Last });
-            ValidateInstalledPatch();
+            // FineDining may attach its independently owned EpicLoot hook in a
+            // later Start. Every actual dispense still requires full readiness.
+            ValidateInstalledPatchCore(requireExpiry: false);
             _installed = true;
             _failure = null;
         }
@@ -129,7 +137,7 @@ internal static class FeedBarrelDropProtection
             return code;
         }
         int lookup = FindCandidateLookup(code);
-        MethodInfo filter = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(FilterStackCandidate));
+        MethodInfo filter = FilterMethod;
         // The existing null check consumes the filtered result. All ownership,
         // amount, quality, destruction and saving logic stays in the original.
         code.InsertRange(lookup + 1, new[]
@@ -247,7 +255,7 @@ internal static class FeedBarrelDropProtection
     private static void ValidateComposedBody(List<CodeInstruction> code)
     {
         int lookup = FindCandidateLookup(code);
-        MethodInfo filter = AccessTools.DeclaredMethod(typeof(FeedBarrelDropProtection), nameof(FilterStackCandidate));
+        MethodInfo filter = FilterMethod;
         if (code.Count(instruction => instruction.Calls(filter)) != 1 || lookup + 2 >= code.Count ||
             code[lookup + 1].opcode != OpCodes.Ldarg_0 || !code[lookup + 2].Calls(filter))
             throw new InvalidOperationException("Feed Barrel stack filter is missing, duplicated or moved.");
@@ -270,16 +278,22 @@ internal static class FeedBarrelDropProtection
     }
 
     private static void ValidateInstalledPatch()
+        => ValidateInstalledPatchCore(requireExpiry: true);
+
+    private static void ValidateInstalledPatchCore(bool requireExpiry)
     {
         Patches? patches = _target == null ? null : Harmony.GetPatchInfo(_target);
         try
         {
-            // GetCurrentInstructions covers transpilers, not wrapper callbacks or
-            // HarmonyX IL manipulators. Do not silently approve an unseen route.
-            if (patches == null || patches.Prefixes.Count != 0 || patches.Postfixes.Count != 0 ||
+            // GetCurrentInstructions does not include wrapper callbacks. The Epic
+            // replacement has its own verified guard; all other wrappers still fail.
+            if (patches == null || patches.Postfixes.Count != 0 ||
                 patches.Finalizers.Count != 0 || patches.ILManipulators.Count != 0 ||
                 patches.Transpilers.Count(patch => patch.owner == HarmonyId) != 1 ||
                 !patches.Transpilers.Any(patch => patch.owner == HarmonyId && patch.PatchMethod == _transpiler))
+                throw new InvalidOperationException("Unsupported wrapper or incomplete Feed Barrel stack guard.");
+            bool wrappersSupported = FeedEpicLootStackCompatibility.Ensure(patches, FilterMethod, requireExpiry);
+            if (patches.Prefixes.Count != 0 && !wrappersSupported)
                 throw new InvalidOperationException("Unsupported wrapper or incomplete Feed Barrel stack guard.");
             if (_validatedPatches != null && SameTranspilers(_validatedPatches, patches)) return;
             ValidateComposedBody(PatchProcessor.GetCurrentInstructions(_target!));
@@ -334,6 +348,12 @@ internal static class FeedBarrelDropProtection
     {
         _installed = false;
         _validatedPatches = null;
+        try { FeedEpicLootStackCompatibility.Shutdown(); }
+        catch (Exception error)
+        {
+            try { FeedLikeGrandmaPlugin.Log.LogError("Feed Barrel EpicLoot guard cleanup failed: " + error.Message); }
+            catch (Exception) { }
+        }
         try
         {
             _harmony?.UnpatchSelf();
@@ -349,7 +369,8 @@ internal static class FeedBarrelDropProtection
     internal static void Shutdown()
     {
         RemoveOwnPatch();
-        if (_harmony != null) return; // Retain the accessor while our filter could still be installed.
+        // Either stack route can still reference this accessor if cleanup fails.
+        if (_harmony != null || FeedEpicLootStackCompatibility.IsInstalled) return;
         _networkView = null;
         _target = null;
         _transpiler = null;

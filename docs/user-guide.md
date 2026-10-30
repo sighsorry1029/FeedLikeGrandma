@@ -191,6 +191,8 @@ Install the same patched FLG build on the server and every client. Azu ground co
 
 Other mods can extend ground-stack merging while FLG keeps protected and ordinary food separate. FLG checks the combined merge path instead of rejecting every other merge transpiler or maintaining a list of allowed mod names. If the required collection or merge contract cannot be established, FLG logs the reason and stops new local barrel dispensing before taking stock; merge-validation failures also identify the relevant patch owners and methods. Manual feeding and ordinary storage remain available. Runtime DLL replacement is unsupported.
 
+EpicLoot's supported replacement stack routine also keeps barrel food separate from ordinary drops, while retaining EpicLoot's magic-item stacking rules. FineDining independently handles expiry composition in that routine, including without FLG; FLG does not insert or repeat its expiry callback. When using both mods, install both coordinated updates on the server and all clients, then restart. No compatibility setting is required. Checks use the relevant methods and active patches, not fixed mod versions or whole-DLL hashes. Changed or incomplete replacement paths stop new local barrel dispensing before stock removal; FineDining separately prevents an unsafe ground auto-stack from changing items.
+
 The Feed Barrel appears in the Hammer's Misc category. Its recipe, material, columns, and rows are configurable. The default inventory is 6 by 2 and the default material uses `ectoplasm_mat`.
 
 Default recipe:

@@ -127,6 +127,14 @@ namespace UnityEngine
 }
 namespace FeedLikeGrandma
 {
+    // This runner exercises marker policy only; actual optional-mod binding and
+    // Harmony composition are exercised by EpicLootStackChecks in original Mono.
+    internal static class FeedEpicLootStackCompatibility
+    {
+        internal static bool IsInstalled => false;
+        internal static bool Ensure(Patches patches, MethodInfo filter, bool requireExpiry) => false;
+        internal static void Shutdown() { }
+    }
     internal static class FeedLikeGrandmaPlugin { internal static readonly TestLog Log = new(); }
     internal sealed class TestLog { internal void LogError(string message) { } }
 }

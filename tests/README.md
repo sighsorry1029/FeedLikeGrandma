@@ -1,5 +1,121 @@
 # Regression checks
 
+## Release 1.2.1 (2026-10-31)
+
+- Debug and normal Release builds completed with zero warnings/errors; each
+  deployment matched the corresponding local Steam plugins DLL. Release assembly
+  `1.2.1.0`, file/BepInPlugin version `1.2.1` and manifest agree. ServerSync and
+  YamlDotNet are merged; English/Korean resources remain embedded.
+- Thunderstore ZIP contains the expected six files and Nexus only the main DLL.
+  Both passed CRC, exact entry-set and source-byte checks. Release DLL SHA-256:
+  `2C82CFA30DAE1887B63322BE5A48A2CAE3E9BDE56C6EF376F917D184855E0FD0`.
+- Final FeedLikeGrandma/FineDining Release DLLs passed **652 shared checks in
+  19 isolated phases on each original Valheim 1.0.21 client/server Mono runtime**.
+  The actual FineDining winter-clock guard is now installed by the fixture.
+  Coverage includes both registration orders, delayed registration, EpicLoot
+  absent, missing/wrong-owner/wrong-order guards, exact expiry/filter ownership,
+  retained magic rules, unknown contracts and independent cleanup. Recognizing
+  the clock guard fixes the otherwise rejected FineDining 1.1.12 combination.
+- Prefix-free older FineDining keeps its vanilla path without requiring an
+  EpicLoot bridge; a new FineDining declaring a clock guard must actually install
+  it. Unknown Prefixes are not generally allowed.
+- The source-linked marker/merge runner passed 24 checks. Original client/server
+  API checks each passed 1,905 direct references, 58 explicit Harmony contracts,
+  47 private bindings and 13 dynamic contracts. `git diff --check` passed.
+
+The pre-existing untracked `diagnostics/` standalone projects are unrelated and
+excluded from this release/commit; the already integrated OrbDiagnostics remains
+unchanged. Earlier sections describe the pre-winter-guard 606-check stage and its
+hashes. No actual Unity startup, feeding, ownership transfer, native world saving
+or multiplayer run is claimed; the live test matrix below remains outstanding.
+
+## EpicLoot: independent FLG protection and FineDining expiry (2026-10-31)
+
+EpicLoot's `MagicItemData.ItemDrop_AutoStackItems_Patch.Prefix` replaces the
+whole ground-stack routine and returns false, bypassing transpilers on the
+original game method. FLG adds only its existing candidate protection filter to
+that replacement. FineDining independently inserts its own expiry helper
+immediately before the quantity increment, including when FLG is absent. FLG
+never inserts or repeats that helper. EpicLoot still owns eligibility, ownership,
+destruction and saving. No extra physics query, item search, per-frame IL analysis,
+item format or network protocol is added.
+
+Compatibility validates the relevant replacement/helper bodies using normalized
+IL fingerprints, original signatures/access, Harmony bindings, active patches,
+and the combined body with one independently owned filter/expiry call. Whole-DLL hashes, MVIDs and version
+numbers are identification only. Nops, branch offsets/sizes and metadata tokens
+do not gate activation. This remains a narrow inspected contract, not proof of
+equivalence for arbitrary future code. Unsupported original transpilers cannot
+silently lose their policy behind EpicLoot's replacement: they stop new local
+barrel dispensing. FineDining also guards the auto-stack call before EpicLoot
+can mutate items. FLG initialization tolerates a pending FineDining Start, but
+every actual dispense requires its expiry route when FineDining is present.
+Both registration orders and late registration work without duplicate calls.
+Runtime DLL replacement remains unsupported; install both coordinated updates.
+
+Inspected original optional DLLs from the supplied `orgetorix` profile:
+
+- EpicLoot plugin 0.15.4 (assembly 0.13.0.0): SHA-256
+  `1BABCF759B648A07F3856714A2C2F3869D9846C0C8F26B22BC07AB1373B3F1D4`.
+- The cross-mod suite uses the updated sibling FineDining Debug DLL, SHA-256
+  `507376B53C5858A34573E9B86B43D54048D21AD16D549C67B0A4060287BE648F`.
+  Existing no-EpicLoot regressions also use the supplied older FineDining DLL
+  `1B72F716F3501328785E4E9BD1FA8BB9D787194A81462AE78207A6397813E12A`.
+- AzuAutoStore 3.1.7: SHA-256
+  `A609E7209832FB96AF11FE3A0F6C499D4ED54F599289D23DF0826A51BDE640EE`.
+
+Validation of the final Debug DLL:
+
+- `dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true` succeeded
+  with zero warnings/errors. Final merged DLL and local Steam plugins copy match
+  SHA-256 `7610230A3ACAC9AF015ACEAFB299EE087291C9952B43345324C38E1CE5F368B1`.
+- Original Valheim 1.0.21 Windows x64 client 26249040 and dedicated-server
+  26266951 Mono each passed 606 cross-mod checks across 19 separate processes.
+  This is one combined suite, not separate totals for each mod. Covers each mod
+  alone, both registration orders, pending and delayed registration, EpicLoot
+  absent, unchanged magic stacking policy, exactly one independently owned
+  filter/expiry call, retained replacement IL, unrelated identity changes,
+  changed relevant methods, unsupported wrappers/transpilers, exception policy,
+  removed guards, repeated validation and independent cleanup. The actual
+  FineDining entry callback refuses unsafe work before EpicLoot can run.
+- A synthetic FLG transpiler that already adds expiry simulates the older
+  experimental bridge. FineDining does not insert another call, refuses to
+  treat the borrowed callback as its own successful insertion, and blocks the
+  operation. No duplicate merge is accepted merely because owners look valid.
+- An actual already-generated `ItemDrop.AutoStackItems` Harmony wrapper followed
+  the later detour of EpicLoot's callback. This uses a null receiver and a
+  temporary test prefix that returns before any game field access; it verifies
+  callback routing, not physical item merging. No Unity native-call stubs were
+  registered. Dynamic private/internal callback access probes compile delegates
+  only; they do not execute the Unity-facing filter or expiry helper.
+- Each original role also passed 32 existing Azu contract/lifecycle checks and
+  29 no-EpicLoot FineDining composition/mutation checks. The synthetic
+  source-linked marker/merge policy runner passed 24 checks, including mixed
+  protection states in both directions and no item/count mutation by filtering.
+- Both original API sets passed 1,905 direct game references, 58 Harmony
+  contracts, 47 private bindings, hotbar fields and 13 dynamic contracts.
+
+The FineDining fixture suppresses only its plugin startup initializer and
+preserves the actual transpiler/helper bodies. Explicit in-memory mod variants
+and a temporary FLG transpiler detour exercise rejected behavior changes and
+the legacy duplicate case. Original game DLLs were never modified or
+publicized. Full BepInEx/Unity startup, physical feeding, actual FineDining expiry
+composition, world saves/reloads, ownership transfer and multiplayer execution
+remain unverified. No Release package, version change or publication was made.
+
+```powershell
+dotnet build tests/AzuCompatibilityChecks.csproj -c Debug
+python tests/run_azu_mono.py <original-game-directory> ./bin/Debug/FeedLikeGrandma.dll <updated-FineDining.dll> <BepInEx-core-directory> "epic-composition:<profile-plugins-directory>"
+```
+
+In a disposable host/dedicated world, update all clients and the server. With
+EpicLoot, FineDining and AzuAutoStore together, trigger ground auto-stacking with
+enough loaded drops, test both mixed-protection directions and same-state pairs,
+and compare barrel/ground/chest/consumed totals. Verify different freshness
+values retain FineDining's expected expiry, different magic data never combines,
+ordinary pickup/re-drop ends protection, and zone reload/owner transfer keeps
+the world marker. Then repeat with each optional mod absent.
+
 ## Release 1.2.0 validation (2026-10-30)
 
 - Normal Release build completed with zero warnings/errors. Assembly version

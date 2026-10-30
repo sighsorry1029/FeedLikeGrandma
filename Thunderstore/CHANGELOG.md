@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1
+
+- Support EpicLoot's replacement ground-stack routine while keeping Feed Barrel food separate from ordinary drops and preserving EpicLoot's magic-item restrictions. Animals continue to eat physical food normally; no compatibility setting is required.
+- Let FineDining compose food expiry exactly once through its own compatibility patch. FeedLikeGrandma owns only the protected-drop filter, supports either initialization order and delayed registration, and does not insert or take over FineDining's expiry policy.
+- Recognize FineDining 1.1.12's winter-clock readiness guard, with or without EpicLoot. Validate its binding, owner, order and complete installation; unknown or incomplete stacking routes still stop new barrel dispensing before stock removal.
+- Added shared composition, cleanup and failure-path checks on original Valheim 1.0.21 client/server Mono runtimes, including missing or altered winter guards. Actual feeding, ownership changes, world reloads and multiplayer remain to be verified in game.
+- Update FeedLikeGrandma on the server and every client together. When using FineDining's new winter support, update both mods together. Existing Orb data, transaction protocols, protection markers and required dependencies are unchanged.
+
 ## 1.2.0
 
 - Store host/server Orb transaction journals under the Valheim local save root at `FeedLikeGrandma/orb-transactions/<world UID>.journal`, respecting a dedicated server's `-savedir`. Profiles using the same save root and world now share the history. World separation, saved formats and duplicate protection are preserved; configuration and icon caches remain profile-local.
