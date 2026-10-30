@@ -13,6 +13,9 @@ internal static partial class TamingOrbSystem
     private const string EmptyReleasedOrbRecovery = "EmptyReleased";
     private static TamingOrbJournal? _orbJournal;
     private static string? _orbJournalError;
+    private static string? _orbJournalPath;
+    private static string? _orbLegacyJournalPath;
+    private static string _orbJournalStorageStatus = "not_opened";
     private static readonly Dictionary<string, float> OrbRecoveryRequests = new(StringComparer.Ordinal);
     private static float _lastReleaseRecoveryScan = -100f;
     private static readonly Dictionary<string, ZDOID> RecoveredReleaseIds = new(StringComparer.Ordinal);
@@ -32,10 +35,14 @@ internal static partial class TamingOrbSystem
         _orbJournal?.Dispose();
         _orbJournal = null;
         _orbJournalError = null;
+        _orbJournalPath = null;
+        _orbLegacyJournalPath = null;
+        _orbJournalStorageStatus = "not_opened";
         RecoveredReleaseIds.Clear();
         SessionFinalOrbTransactions.Clear();
         DurableCaptureTargets.Clear();
         _lastReleaseRecoveryScan = -100f;
+        ResetOrbDiagnosticSession();
     }
 
     private static bool EnsureOrbJournal()
@@ -43,15 +50,30 @@ internal static partial class TamingOrbSystem
         if (!IsOrbServer() || OrbWorldUid() == 0) return false;
         if (_orbJournal != null) return _orbJournal.IsHealthy;
         if (_orbJournalError != null) return false;
-        string directory = Path.Combine(BepInEx.Paths.ConfigPath, "FeedLikeGrandma", "orb-transactions");
-        if (TamingOrbJournal.TryOpen(directory, OrbWorldUid(), out _orbJournal, out string error))
+        string error;
+        try
         {
-            // ZDOIDs are reassigned on world load. Only current-session target IDs may be indexed;
-            // older captures are identified by their custom transaction marker on the creature.
-            return true;
+            long world = OrbWorldUid();
+            string saveRoot = Utils.GetSaveDataPath(FileHelpers.FileSource.Local);
+            if (string.IsNullOrWhiteSpace(saveRoot)) throw new InvalidOperationException("Valheim local save path is unavailable.");
+            string directory = Path.GetFullPath(Path.Combine(saveRoot, "FeedLikeGrandma", "orb-transactions"));
+            string legacyDirectory = Path.GetFullPath(Path.Combine(BepInEx.Paths.ConfigPath, "FeedLikeGrandma", "orb-transactions"));
+            string fileName = world.ToString(CultureInfo.InvariantCulture) + ".journal";
+            _orbJournalPath = Path.Combine(directory, fileName);
+            _orbLegacyJournalPath = Path.Combine(legacyDirectory, fileName);
+            if (TamingOrbJournal.TryOpenShared(directory, legacyDirectory, world, out _orbJournal, out _orbJournalStorageStatus, out error))
+            {
+                try { FeedLikeGrandmaPlugin.Log.LogInfo($"Orb journal {_orbJournalStorageStatus}: world={world} path=\"{_orbJournal!.FilePath}\" legacy=\"{_orbLegacyJournalPath}\"."); }
+                catch (Exception) { /* A logging failure must not discard a valid open journal. */ }
+                // ZDOIDs are reassigned on world load. Only current-session target IDs may be indexed;
+                // older captures are identified by their custom transaction marker on the creature.
+                return true;
+            }
         }
+        catch (Exception ex) { error = "Orb journal storage could not be initialized: " + ex.Message; }
+        _orbJournalStorageStatus = "unavailable";
         _orbJournalError = error;
-        FeedLikeGrandmaPlugin.Log.LogError($"Orb journal unavailable; transactions are blocked: {error}");
+        FeedLikeGrandmaPlugin.Log.LogError($"Orb journal unavailable; this world's Orb transactions are blocked. path=\"{_orbJournalPath}\" legacy=\"{_orbLegacyJournalPath}\": {error}");
         return false;
     }
 
@@ -149,6 +171,8 @@ internal static partial class TamingOrbSystem
         if (!HasPendingOrbItem(item)) return false;
         if (!TryReadPendingOrbItem(item, out OrbPendingItemState? pending) || pending == null || pending.WorldUid != OrbWorldUid())
         {
+            LogOrbFailure(pending == null ? "pending_unreadable" : "pending_world_mismatch",
+                pending?.OrbId ?? string.Empty, pending?.TransactionId ?? string.Empty);
             FeedLocalization.Message(player, "$flg_taming_orb_recovery_blocked");
             return true;
         }
@@ -244,6 +268,7 @@ internal static partial class TamingOrbSystem
             ZPackage reply = new();
             reply.Write(world); reply.Write(txId); reply.Write(orbId); reply.Write(state); reply.Write(prepared);
             ZRoutedRpc.instance.InvokeRoutedRPC(sender, OrbRecoveryClientRpc, reply);
+            if (state == "unknown") OrbServerReport.ObserveUnknownRecovery(txId, orbId);
         }
         catch (Exception ex) { FeedLikeGrandmaPlugin.Log.LogWarning($"Orb recovery request rejected: {ex.Message}"); }
     }
@@ -259,6 +284,7 @@ internal static partial class TamingOrbSystem
             if (state == EmptyReleasedOrbRecovery)
             {
                 if (TryRecoverEmptyOrbOnClient(txId, orbId, prepared)) return;
+                LogOrbFailure("empty_identity_recovery_unresolved", orbId, txId);
                 if (Player.m_localPlayer != null)
                     FeedLocalization.Message(Player.m_localPlayer, "$flg_taming_orb_recovery_blocked");
                 return;
@@ -272,6 +298,7 @@ internal static partial class TamingOrbSystem
                 ClientReleaseTransactions.Remove(txId);
                 OrbRecoveryRequests.Remove(txId);
             }
+            else LogOrbFailure(final ? "recovery_item_unresolved" : "recovery_outcome_unconfirmed", orbId, txId);
             if (Player.m_localPlayer != null)
                 FeedLocalization.Message(Player.m_localPlayer, resolved ? "$flg_taming_orb_recovered" : "$flg_taming_orb_recovery_blocked");
         }
@@ -402,18 +429,21 @@ internal static partial class TamingOrbSystem
         if (!EnsureOrbJournal())
         {
             SendCapturePreparedToPeer(peer, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
+            LogOrbFailure("capture_journal_unavailable", request.OrbId, request.TransactionId);
             return true;
         }
         if (_orbJournal!.TryGet(request.TransactionId, out TamingOrbJournal.Entry? same) && same != null)
         {
             if (same.RequestData == request.Write().GetBase64() && !string.IsNullOrEmpty(same.ResultData) && CanUseStoredOutcome(same))
                 ZRoutedRpc.instance.InvokeRoutedRPC(peer, CaptureResultClientRpc, new ZPackage(same.ResultData));
+            else LogOrbFailure("recorded_capture_unresolved", request.OrbId, request.TransactionId);
             return true; // A persisted reservation must be reconciled, never silently re-executed.
         }
         if (!_orbJournal.TryGetBlockingAction(request.OrbId, TamingOrbJournal.Capture, out _)) return false;
         OrbCapturePrepared rejected = OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked"));
         rejected.RecoverEmptyOrb = CanRecoverEmptyOrbIdentity(request.OrbId);
         SendCapturePreparedToPeer(peer, rejected);
+        LogOrbFailure("capture_blocked_by_record", request.OrbId, request.TransactionId);
         return true;
     }
 
@@ -422,24 +452,36 @@ internal static partial class TamingOrbSystem
         if (!EnsureOrbJournal())
         {
             SendReleaseApprovalToPeer(peer, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
+            LogOrbFailure("release_journal_unavailable", request.OrbId, request.TransactionId);
             return true;
         }
         if (_orbJournal!.TryGet(request.TransactionId, out TamingOrbJournal.Entry? same) && same != null)
         {
             if (same.RequestData == request.Write().GetBase64() && !string.IsNullOrEmpty(same.ResultData) && CanUseStoredOutcome(same))
                 ZRoutedRpc.instance.InvokeRoutedRPC(peer, ReleaseResultClientRpc, new ZPackage(same.ResultData));
+            else LogOrbFailure("recorded_release_unresolved", request.OrbId, request.TransactionId);
             return true;
         }
         if (!_orbJournal.TryGetBlockingAction(request.OrbId, TamingOrbJournal.Release, out TamingOrbJournal.Entry? blocking)) return false;
-        if (blocking != null && blocking.Kind == TamingOrbJournal.Release && blocking.State == TamingOrbJournal.CompletedSuccess && CanUseStoredOutcome(blocking) &&
-            OrbReleaseRequest.TryRead(new ZPackage(blocking.RequestData), out OrbReleaseRequest? old) && old != null &&
+        bool completedRelease = blocking != null && blocking.Kind == TamingOrbJournal.Release && blocking.State == TamingOrbJournal.CompletedSuccess;
+        // This is the original decision, evaluated once. Diagnostics must not refresh
+        // the recovery cache or repeat the decision merely to explain a rejection.
+        bool storedOutcomeUsable = completedRelease && CanUseStoredOutcome(blocking!);
+        if (storedOutcomeUsable &&
+            OrbReleaseRequest.TryRead(new ZPackage(blocking!.RequestData), out OrbReleaseRequest? old) && old != null &&
             old.Payload == request.Payload && old.CreatureManagerState == request.CreatureManagerState &&
             OrbReleaseResult.TryRead(new ZPackage(blocking.ResultData), out OrbReleaseResult? result) && result != null)
         {
             // A stale saved copy of an already-consumed orb may only become empty, never spawn again.
             ZRoutedRpc.instance.InvokeRoutedRPC(peer, ReleaseResultClientRpc, OrbReleaseResult.SuccessResult(request, result.SpawnedId).Write());
         }
-        else SendReleaseApprovalToPeer(peer, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
+        else
+        {
+            SendReleaseApprovalToPeer(peer, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
+            LogOrbFailure(!completedRelease ? "release_blocked_by_record" : !storedOutcomeUsable
+                ? "release_outcome_unconfirmed" : "release_record_mismatch", request.OrbId, request.TransactionId);
+            if (completedRelease) OrbServerReport.Observe(request, blocking!, storedOutcomeUsable);
+        }
         return true;
     }
 }

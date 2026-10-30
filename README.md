@@ -74,9 +74,11 @@ Keep the orb in your inventory during the 4.5-second effect. For Feed Barrels, l
 
 ## Installation
 
-Install with a Valheim mod manager, or place `FeedLikeGrandma.dll` in `BepInEx/plugins/FeedLikeGrandma/`. Requires **BepInExPack Valheim 5.4.2351**.
+Install with a Valheim mod manager, or place `FeedLikeGrandma.dll` in `BepInEx/plugins/FeedLikeGrandma/`. Requires **BepInExPack Valheim 5.4.2360**.
 
 In multiplayer, install the **same FeedLikeGrandma version on the server and every client**. Start the game and enter a world once to generate the configuration files.
+
+Orb transaction journals belong to the host/server's Valheim save root (`FeedLikeGrandma/orb-transactions/<world UID>.journal`), so profiles using the same world/save root share the history. A valid journal in the current profile's old config folder is automatically copied on the first Orb transaction/recovery; the original is preserved. Conflicting histories are not overwritten or merged. Back up the active shared journal with your world. See the [Taming Orb guide](https://github.com/sighsorry1029/FeedLikeGrandma/blob/main/docs/user-guide.md#taming-orb) for migration boundaries.
 
 ## Configuration
 
@@ -89,6 +91,8 @@ Paths are relative to `BepInEx/config/`:
 | `FeedLikeGrandma/feed.reference.yml` | Generated reference for loaded vanilla and modded creatures. |
 
 Edit `feed.yml`, not the generated reference. Both the config and YAML reload automatically; server-synced settings and YAML follow the server in multiplayer.
+
+For an Orb problem, set `[Debug] OrbDiagnostics = On`, reproduce the problem, then set it `Off`. No hotkeys are needed: Orb use or related traffic automatically starts a trace with before/after inventory reports. Traces save after 60 seconds or when disabled/disconnected. Reports are in `BepInEx/config/FeedLikeGrandma/diagnostics` in the running profile. The setting defaults to Off and is local; enable it separately on a remote server for server evidence. See [Orb diagnostics](https://github.com/sighsorry1029/FeedLikeGrandma/blob/main/docs/user-guide.md#orb-diagnostics) for collection, storage limits and removal of the old standalone diagnostic DLLs.
 
 Many creatures work with their usual foods without a custom block. Foods use a value of **1** unless overridden. See the [configuration guide](https://github.com/sighsorry1029/FeedLikeGrandma/blob/main/docs/user-guide.md#yaml-configuration) for examples.
 

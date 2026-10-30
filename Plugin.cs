@@ -3,9 +3,11 @@ using System.Collections;
 using System.IO;
 using System.Reflection;
 using BepInEx;
+using BepInEx.Bootstrap;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+using FeedLikeGrandma.OrbDiagnostics;
 using JetBrains.Annotations;
 using ServerSync;
 using UnityEngine;
@@ -35,7 +37,7 @@ internal enum RuntimeRefreshFlags
 public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 {
     internal const string ModName = "FeedLikeGrandma";
-    internal const string ModVersion = "1.1.10";
+    internal const string ModVersion = "1.2.0";
     internal const string Author = "sighsorry";
     private const string ModGuid = $"{Author}.{ModName}";
     private static readonly string ConfigFileName = $"{ModGuid}.cfg";
@@ -89,6 +91,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
     internal static ConfigEntry<Toggle> ShowFoodEvenIfAlerted = null!;
     internal static ConfigEntry<string> TamingOrbRecipe = null!;
     internal static ConfigEntry<string> TamingOrbCraftingStation = null!;
+    internal static ConfigEntry<Toggle> OrbDiagnostics = null!;
 
     private readonly Harmony _harmony = new(ModGuid);
     private readonly object _reloadLock = new();
@@ -107,6 +110,10 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
     private bool _sourceOfTruthChangedSubscribed;
     private bool _harmonyPatched;
     private bool _shutdownCompleted;
+    private OrbDiagnosticsController? _orbDiagnostics;
+    private bool _orbDiagnosticsStarted;
+    private volatile bool _orbDiagnosticsConfigDirty;
+    private bool _legacyOrbServerDiagnostics;
     public enum Toggle
     {
         On = 1,
@@ -180,6 +187,41 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         // is needed on every peer: Azu may run only on a different client.
         FeedBarrelDropProtection.Initialize();
         FeedAzuAutoStoreCompatibility.Initialize();
+        _legacyOrbServerDiagnostics = Chainloader.PluginInfos.ContainsKey("sighsorry.FeedLikeGrandma.OrbServerDiagnostics");
+        if (_legacyOrbServerDiagnostics || Chainloader.PluginInfos.ContainsKey("sighsorry.FeedLikeGrandma.OrbDiagnostics"))
+            Log.LogWarning("Standalone Orb diagnostic DLLs are installed. Their behavior is independent of Debug.OrbDiagnostics; remove those DLLs and restart to use only the built-in diagnostics.");
+        _orbDiagnosticsStarted = true;
+        try
+        {
+            _orbDiagnostics = new OrbDiagnosticsController();
+            _orbDiagnostics.Initialize();
+        }
+        catch (Exception ex)
+        {
+            Log.LogWarning($"Orb client diagnostics unavailable; ordinary Orb behavior unchanged: {ex.Message}");
+        }
+        ApplyOrbDiagnosticsConfig();
+    }
+
+    private void Update()
+    {
+        if (_isShuttingDown || !_orbDiagnosticsStarted) return;
+        // SettingChanged can originate from a config editor; apply Unity/Harmony
+        // lifecycle changes on the game thread, before processing another trace tick.
+        if (_orbDiagnosticsConfigDirty) ApplyOrbDiagnosticsConfig();
+        _orbDiagnostics?.Tick();
+    }
+
+    private void ApplyOrbDiagnosticsConfig()
+    {
+        _orbDiagnosticsConfigDirty = false;
+        bool enabled = OrbDiagnostics.Value.IsOn();
+        try { _orbDiagnostics?.SetEnabled(enabled); }
+        catch (Exception ex) { Log.LogWarning($"Orb client diagnostics toggle failed: {ex.Message}"); }
+        TamingOrbSystem.SetOrbServerDiagnosticsEnabled(enabled && !_legacyOrbServerDiagnostics);
+        Log.LogInfo($"Debug.OrbDiagnostics = {OrbDiagnostics.Value} applied locally.");
+        if (enabled && _legacyOrbServerDiagnostics)
+            Log.LogWarning("Built-in Orb server diagnostics skipped: standalone OrbServerDiagnostics is installed. Remove that DLL and restart to use the Debug setting for server diagnostics.");
     }
 
     private void OnDestroy()
@@ -234,6 +276,11 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
             _sourceOfTruthChangedSubscribed = false;
         }
 
+        _orbDiagnosticsStarted = false;
+        try { _orbDiagnostics?.Shutdown(); }
+        catch (Exception ex) { Log.LogWarning($"Orb diagnostic cleanup failed: {ex.Message}"); }
+        _orbDiagnostics = null;
+        TamingOrbSystem.SetOrbServerDiagnosticsEnabled(false);
         TamingOrbSystem.Shutdown();
         FeedCuisineCompatibility.Shutdown();
         FeedBetterRidingCompatibility.Shutdown();
@@ -267,6 +314,16 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         const string meadTamer = "04 - MeadTamer";
         const string riding = "05 - Riding";
         const string compatibility = "06 - Compatibility";
+
+        // Diagnostics are local controls, including on a listen host. They never
+        // grant a client permission to enable collection on a remote server.
+        OrbDiagnostics = config("Debug", "OrbDiagnostics", Toggle.Off,
+            "Local, read-only Taming Orb diagnostics. Usage: set On, enter a world, reproduce the Orb problem, then set Off. No hotkeys or restart required. Does not repair Orbs.\n" +
+            "Client: keep the affected Orb and, if available, a working Orb in your inventory. Orb use or related Orb traffic automatically starts a trace with before/after inventory reports when available. Off, disconnect, world change or 60 seconds saves it; while On, the next Orb activity starts another trace.\n" +
+            "Reports: BepInEx/config/FeedLikeGrandma/diagnostics in the running profile (uses the active BepInEx config directory). Send the matching .txt and .json files, attempt time/Orb slots, and LogOutput.log. Reports stay local and can include creature names and world/transaction IDs.\n" +
+            "Storage limit: 20 reports or 128 MiB in that folder. Existing reports are never automatically deleted. If saving fails or storage is full, the current report stays in memory and new traces pause. Fix storage or move old reports elsewhere, then switch Off and On to retry before exiting.\n" +
+            "Server: turn On separately on the server for detailed completed-release rejection and unknown-recovery logs in BepInEx/LogOutput.log (each type at most once per 30 seconds). A local host enables both roles. This setting is not server-synced. Turn Off after collecting evidence.",
+            synchronizedSetting: false, order: 1000);
 
         ServerConfigLocked = config(general, "Lock Configuration", Toggle.On,
             "If on, the synced config and YAML are controlled by the server.", order: 1000);
@@ -730,6 +787,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
     private static void SubscribeRuntimeConfigChanges()
     {
+        OrbDiagnostics.SettingChanged += OnOrbDiagnosticsConfigChanged;
         TamingOrbRecipe.SettingChanged += OnTamingOrbConfigChanged;
         TamingOrbCraftingStation.SettingChanged += OnTamingOrbConfigChanged;
         FeedBarrelRecipe.SettingChanged += OnFeedBarrelConfigChanged;
@@ -742,6 +800,7 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
 
     private static void UnsubscribeRuntimeConfigChanges()
     {
+        OrbDiagnostics.SettingChanged -= OnOrbDiagnosticsConfigChanged;
         TamingOrbRecipe.SettingChanged -= OnTamingOrbConfigChanged;
         TamingOrbCraftingStation.SettingChanged -= OnTamingOrbConfigChanged;
         FeedBarrelRecipe.SettingChanged -= OnFeedBarrelConfigChanged;
@@ -750,6 +809,11 @@ public sealed class FeedLikeGrandmaPlugin : BaseUnityPlugin
         FeedBarrelContainerRows.SettingChanged -= OnFeedBarrelConfigChanged;
         EggHatchTimeMultiplier.SettingChanged -= OnFeedRuleConfigChanged;
         DefaultDragonRestrictedBiomes.SettingChanged -= OnDragonFlightConfigChanged;
+    }
+
+    private static void OnOrbDiagnosticsConfigChanged(object sender, EventArgs e)
+    {
+        if (Instance != null && !Instance._isShuttingDown) Instance._orbDiagnosticsConfigDirty = true;
     }
 
     private ConfigEntry<T> config<T>(string group, string name, T value, string description, bool synchronizedSetting = true, int? order = null)

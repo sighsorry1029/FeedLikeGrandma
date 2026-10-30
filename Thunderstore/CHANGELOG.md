@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+- Store host/server Orb transaction journals under the Valheim local save root at `FeedLikeGrandma/orb-transactions/<world UID>.journal`, respecting a dedicated server's `-savedir`. Profiles using the same save root and world now share the history. World separation, saved formats and duplicate protection are preserved; configuration and icon caches remain profile-local.
+- Automatically validate and copy the current profile's legacy journal on the first Orb transaction/recovery, keeping the original backup. Existing shared history may continue beyond that backup; conflicting, corrupt or inaccessible records are not overwritten or merged. Other profiles are not searched. Back up the active shared journal with the world; missing historical records and earlier duplicates are not automatically repaired.
+- Include client and server Orb diagnostics in the main DLL. Enable the local, default-Off `[Debug] OrbDiagnostics` setting, reproduce the issue, then switch Off. No hotkeys are needed. Client recording starts on Orb activity and saves after 60 seconds, on Off, disconnect or world change; On continues waiting for the next activity. Config changes apply without restarting.
+- Save client `.txt` and `.json` reports in the running profile's `BepInEx/config/FeedLikeGrandma/diagnostics`, with before/after inventory evidence when available. Limit storage to 20 reports / 128 MiB without deleting existing evidence. Failed saves retain the report and pause new collection; fix storage or move old reports, then switch Off and On to retry before exiting. Earlier diagnostic files are left in their old location.
+- Add throttled Orb failure reasons and detailed server evidence for rejected completed releases and unknown recovery replies, including journal paths and record state. Server details remain in `BepInEx/LogOutput.log`; enable the setting separately on a remote server. A local host enables both roles. Diagnostics observe existing operations without repairing Orbs or issuing additional recovery requests.
+- Remove the old standalone `FeedLikeGrandma.OrbDiagnostics.dll` and `FeedLikeGrandma.OrbServerDiagnostics.dll` while the game/server is stopped before using built-in diagnostics. If still installed, the matching built-in role is skipped. Update the server and every client together. Updated the BepInExPack Valheim dependency to `5.4.2360`.
+- Added journal migration, locking, diagnostic lifecycle and report-storage regression coverage against original Valheim 1.0.21 client/server assemblies and Mono runtimes. Actual Unity startup, live config reload and multiplayer verification remain pending.
+
 ## 1.1.10
 
 - Fixed Feed Barrels stopping with `Uninspected patch on ItemDrop.AutoStackItems` when FineDining or another compatible ground-stack transpiler was loaded, including worlds without AzuAutoStore.

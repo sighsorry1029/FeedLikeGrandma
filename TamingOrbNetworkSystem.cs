@@ -169,6 +169,7 @@ internal static partial class TamingOrbSystem
                 Time.realtimeSinceStartup - transaction.StartedRealtime >= OrbPrepareTimeoutSeconds)
             {
                 ClientCaptureTransactions.Remove(transactionId);
+                LogOrbFailure("capture_prepare_timeout", transaction.Request.OrbId, transactionId);
                 FeedLocalization.Message(Player.m_localPlayer, "$flg_taming_orb_recovery_blocked");
                 yield break;
             }
@@ -281,6 +282,7 @@ internal static partial class TamingOrbSystem
         };
         if (!PersistCapture(transaction, TamingOrbJournal.Reserved))
         {
+            LogOrbFailure("capture_reservation_write_failed", request.OrbId, request.TransactionId);
             SendCapturePreparedToPeer(sender, OrbCapturePrepared.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
             return;
         }
@@ -789,6 +791,7 @@ internal static partial class TamingOrbSystem
                 Time.realtimeSinceStartup - transaction.StartedRealtime >= OrbPrepareTimeoutSeconds)
             {
                 ClientReleaseTransactions.Remove(transactionId);
+                LogOrbFailure("release_approval_timeout", transaction.Request.OrbId, transactionId);
                 FeedLocalization.Message(Player.m_localPlayer, "$flg_taming_orb_recovery_blocked");
                 yield break;
             }
@@ -885,6 +888,7 @@ internal static partial class TamingOrbSystem
         };
         if (!PersistReleaseResult(transaction, null))
         {
+            LogOrbFailure("release_reservation_write_failed", request.OrbId, request.TransactionId);
             SendReleaseApprovalToPeer(sender, OrbReleaseApproval.Failure(request, FeedLocalization.Text("$flg_taming_orb_recovery_blocked")));
             return;
         }

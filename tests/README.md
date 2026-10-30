@@ -1,5 +1,226 @@
 # Regression checks
 
+## Release 1.2.0 validation (2026-10-30)
+
+- Normal Release build completed with zero warnings/errors. Assembly version
+  `1.2.0.0`, file/BepInPlugin versions and manifest `1.2.0` agree. Manifest
+  dependency is `denikson-BepInExPack_Valheim-5.4.2360`.
+- Thunderstore ZIP contains exactly the six intended DLL/document/resource
+  files; Nexus ZIP contains only the DLL. CRC checks passed and all packaged
+  bytes match their source files. English/Korean resources and the merged
+  ServerSync/YamlDotNet dependencies are present in the main DLL. No separate
+  diagnostic DLL is required or packaged.
+- The final Release DLL and automatically deployed Steam plugins copy match
+  SHA-256 `833987906D0DC18711356613BF22BE4A6223A2920FAF854BF7A448360C8FF91B`.
+- Against the final Release artifact, each original Valheim 1.0.21 Windows x64
+  client (26249040) / dedicated-server (26266951) Mono runtime passed 67
+  untouched-DLL diagnostic checks, 144 explicit lifecycle-fixture checks and
+  143 persistence/receipt/codec checks. The 144 fixture count includes the
+  67 baseline checks; do not sum those as independent untouched-DLL checks.
+- Both original API sets passed 1,901 direct references, 58 Harmony contracts,
+  47 private bindings, hotbar fields and 13 dynamic/reflection contracts.
+  Scoped diagnostic inspection passed 125 public accesses, seven passive
+  callbacks, the sole default-Off/local control and absence of input polling.
+- Earlier unchanged source-linked migration (114) and parser/retention (181)
+  checks passed .NET and both original Mono runtimes as documented below.
+  Their isolation limits and the explicit native-boundary substitutions for
+  lifecycle fixtures still apply. No original game DLL was publicized/modified.
+
+Actual Unity/BepInEx startup, live cfg changes, real profile migration and
+multiplayer execution remain unverified. The preexisting standalone sources
+under local `diagnostics/` are not build/test inputs and are excluded from this
+release commit; the built-in sources and their tests are included.
+
+## Diagnostic config folder and 60-second window (2026-10-30)
+
+New reports now use `Paths.ConfigPath/FeedLikeGrandma/diagnostics`, normally
+`BepInEx/config/FeedLikeGrandma/diagnostics` in the running profile. Existing
+reports in the previous directory are left untouched; no migration runs.
+The client trace window is 60 seconds from its triggering Orb event. Config
+description, report coverage, HUD message and user documentation agree. Server
+reports remain in the BepInEx log with their existing 30-second rate limit.
+
+Debug build/deployment succeeded with zero warnings/errors. Final merged DLL
+and Steam plugin SHA-256 both
+`E426426A3182655137A6EC41428A9DFFE951C67E27C56098CA9974B1124BFA76`.
+Affected lifecycle fixtures passed 144 checks per original 1.0.21 client/dedicated
+Mono runtime, including distinct BepInEx config/root paths, no eager report folder
+creation, just-before-60 and exact-60 boundaries, save and re-arm. Both scoped
+static checks passed 125 public game accesses, seven passive callbacks, one local
+default-Off control and no diagnostic input polling. The earlier fixture's native
+boundary substitutions below still apply; no original game DLL was modified.
+The unchanged source parser/retention suite was not rerun for this path/time-only
+change. Actual game startup, live cfg edits and multiplayer remain unverified.
+
+## Prior config-only automatic Orb diagnostics (2026-10-30)
+
+`[Debug] OrbDiagnostics` is now the sole diagnostic control, local and default Off.
+On arms the observer after a local player/world exists. Orb-specific entry events
+start a report before recording that first event. A 90-second window saves and
+returns to armed waiting; Off/disconnect saves and removes only owned hooks.
+World changes omit the after snapshot to avoid importing a different world's
+inventory. Hook lifetime is separate from trace lifetime; observed callbacks do
+not patch/unpatch Harmony. There is no diagnostic key polling, idle snapshot,
+per-frame file retry, or change to Orb transaction decisions.
+
+Saving is limited to 20 report stems / 128 MiB of top-level report-folder files.
+Orphan formats count; unrelated and stale temporary files consume the byte quota.
+Existing evidence is never removed automatically. An exclusive `.reports.lock`
+serializes writers. Bounded temporary streams enforce the remaining byte budget
+while serializing both formats. Failed saves clean only their own incomplete
+files; the controller keeps the report, pauses new traces, and retries once on
+an explicit Off-to-On transition.
+
+```powershell
+dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true
+dotnet build tests/OrbDiagnosticDataChecks.csproj -c Debug
+& tests/bin/orb-diagnostic-data/OrbDiagnosticDataChecks.exe
+dotnet build tests/OrbDiagnosticRuntimeChecks.csproj -c Debug
+python tests/run_orb_diagnostics_mono.py <original-game-dir> bin/Debug/FeedLikeGrandma.dll <BepInEx-core-dir>
+python tests/run_orb_diagnostics_mono.py <original-game-dir> bin/Debug/FeedLikeGrandma.dll <BepInEx-core-dir> lifecycle
+python tests/run_orb_diagnostics_mono.py <original-game-dir> bin/Debug/FeedLikeGrandma.dll <BepInEx-core-dir> data
+pwsh -NoProfile -File tests/Check-OrbDiagnosticPassivity.ps1 -ManagedPath <original-Managed-dir>
+```
+
+Results on original Windows x64 Valheim 1.0.21 client (26249040) and dedicated
+server (26266951):
+
+- Debug build: zero warnings/errors. Final merged DLL and automatically deployed
+  Steam plugin SHA-256 both
+  `CFF4A20B588469229F5A8C65C93539FA666258922F6A20A57A4C5F073C182A30`.
+- 181 source-linked parser/report checks passed on .NET and both original Mono
+  runtimes, including quota/stream budget/lease/render-failure cleanup and retry.
+  Mono's serializer wraps an I/O exception in TargetInvocationException; the tests
+  unwrap that reflection wrapper only, and verify the underlying IOException.
+- 67 untouched-DLL passive callback/API/packet checks passed per runtime.
+- 142 checks in the explicit lifecycle fixture passed per runtime (includes the
+  same 67, not an additional 142 independent untouched-DLL checks). Covers first
+  event and item facts without native-read errors, unchanged item data, unrelated
+  events, actor-versus-Humanoid-target filtering, long idle, timeout/re-arm, own
+  hook cleanup, world/disconnect, unsaved preservation and explicit retry.
+- Scoped static inspection passed 125 public game accesses, seven void/non-ref
+  callbacks, a single local default-Off setting and no diagnostic input polling.
+  Whole-mod API checks cover 1,901 direct references, 58 Harmony contracts,
+  47 private bindings, hotbar fields and 13 dynamic contracts.
+
+The fixture modifies a temporary **mod** copy only: main-plugin/TamingOrbSystem
+static startup, Snapshot/Notice, local-player field reads (including closures),
+the native-facing world/time preparation boundary, and the null Unity prefab
+comparison are supplied/replaced. Trigger filtering, report transitions, event
+recording, actual filesystem saving and cleanup remain production code. Hook
+tests target synthetic managed methods. Original game DLLs are never changed or
+publicized. This is not actual Unity/BepInEx startup, real game-method hook
+installation, a live inventory, input handling, world evidence scan or multiplayer
+verification. Those remain required, including runtime On/Off config reload,
+client/host/dedicated reproduction, other Harmony patches, and comparing creature
+counts/Orb contents with diagnostics enabled and disabled. No live user reports
+were deleted or rewritten by tests.
+
+The following dated sections record earlier stages and their superseded artifacts.
+
+## Shared Orb journal storage and migration (2026-10-30)
+
+`EnsureOrbJournal` uses the original public
+`Utils.GetSaveDataPath(FileHelpers.FileSource.Local)` API only in the host/server
+role. The active file is `FeedLikeGrandma/orb-transactions/<world UID>.journal`
+under that save root. First journal access checks only the current profile's
+legacy file. Existing serialization/UID/replay checks are unchanged. Icon cache,
+configuration, other worlds and other profiles are not moved or enumerated.
+
+`TryOpenShared` validates full journal chains, preserves the old file, publishes a
+flushed and validated temporary copy without overwriting, and holds a per-world
+lease plus any old source read guard until disposal. A valid legacy byte-prefix
+of an advanced shared journal is accepted; a longer or divergent legacy history
+is blocked. Corrupt/inaccessible records are never replaced with an empty history.
+The shared append cursor is restored to EOF after prefix comparison.
+
+```powershell
+dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true
+dotnet build tests/OrbJournalMigrationChecks.csproj -c Debug
+& tests/bin/orb-journal-migration/OrbJournalMigrationChecks.exe
+python tests/run_orb_journal_migration_mono.py <original-game-dir>
+```
+
+Validation completed:
+
+- Debug build: zero warnings/errors. Final merged DLL and Steam plugin copy
+  SHA-256 both `DBC499C73F677066FDF1E96283FD4535C795E691CBD86FB4A5FF831D97616A16`.
+- 114 source-linked production migration checks passed under .NET Framework,
+  original Windows x64 Valheim 1.0.21 client Mono (26249040), and original
+  dedicated-server Mono (26266951). Uses actual isolated files, two competing
+  openers and separate processes under the same runtime. Covers exact copy,
+  preserved backup, shared continuation/reopen/profile switch, conflicts,
+  malformed/truncated/checksum/wrong-world histories, readonly/path failures,
+  concurrent writers and cleanup. No game DLL was changed/publicized.
+- Final DLL: 143 existing persistence/codec/receipt checks per original runtime.
+  The built-in diagnostic checks also passed again: 67 untouched-DLL checks and
+  107 explicit lifecycle-fixture checks per runtime, with the boundaries below.
+- Both original roles passed 1,901 direct game references, 58 Harmony contracts,
+  47 private bindings, hotbar fields and 13 dynamic contracts. Diagnostic scope
+  passed 125 public game accesses, seven passive callbacks and local default-Off
+  configuration checks. Journal diagnostics only read already-open records;
+  `unknown` recovery replies gain a separate throttled evidence report.
+
+Actual Unity initialization, an actual player's profile transition, live
+host/dedicated migration, network gameplay, and abrupt power-loss durability have
+not been exercised. Original-Mono filesystem checks are not full game execution.
+The journal in the current old profile is guarded; an old FLG version operating
+another profile's separate legacy file is outside that lease. Update hosts, avoid
+downgrading to stale profile history, and back up/restore the active shared journal
+with the corresponding world. No live user journal was manually migrated here.
+
+## Built-in Orb diagnostics (2026-10-30)
+
+At this earlier stage the main DLL included the client dump/trace and typed server report. Local
+`[Debug] OrbDiagnostics` defaults to `Off`; the master and shortcut settings are
+not synchronized. The server report receives the existing release decision rather
+than invoking recovery again. Its former reflection/Harmony adapter is not shipped.
+Existing standalone diagnostic sources under `diagnostics/` remain preserved.
+
+```powershell
+dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true
+dotnet build tests/OrbDiagnosticDataChecks.csproj -c Debug
+& tests/bin/orb-diagnostic-data/OrbDiagnosticDataChecks.exe
+dotnet build tests/OrbDiagnosticRuntimeChecks.csproj -c Debug
+python tests/run_orb_diagnostics_mono.py <original-game-dir> bin/Debug/FeedLikeGrandma.dll <BepInEx-core-dir>
+python tests/run_orb_diagnostics_mono.py <original-game-dir> bin/Debug/FeedLikeGrandma.dll <BepInEx-core-dir> lifecycle
+pwsh -NoProfile -File tests/Check-OrbDiagnosticPassivity.ps1 -ManagedPath <original-Managed-dir>
+```
+
+The earlier diagnostic-only validation used the original Windows x64 Valheim 1.0.21 client (26249040) and
+dedicated-server (26266951) assemblies/runtime. Debug compilation and the final
+merged DLL's automatic Steam-plugin copy succeeded with no warnings/errors and
+matching SHA-256 `E7B8F641EA6A2A8EF0437DFD70541A933256A04822F69AFAD8D22F4ABD9EA429`.
+That artifact is superseded by the migration build documented above.
+
+The unmodified DLL's Mono checks exercise passive callbacks on synthetic methods
+and original managed packet copies. The separate `lifecycle` mode explicitly uses
+a temporary **mod** fixture: only main-plugin/TamingOrbSystem static startup is
+suppressed, controller Snapshot/Notice are substituted, and temporary BepInEx
+paths/controller initialization/logger are supplied. Original game DLLs are never
+changed or publicized. This isolates real report writing, Off cleanup, failed-save
+retention/retry, re-enable/shutdown, legacy-plugin exclusion, server Off and parsing;
+it does not validate actual BepInEx/Unity startup, inventory snapshots or server
+world scans. Static checks inspect the untouched final DLL for passive game access,
+void/non-ref callbacks, config defaults and removal of the standalone server adapter.
+
+Results: 162 source-linked parser/report checks; 67 untouched-DLL Mono checks per
+role; 107 checks per role in the explicit lifecycle fixture (the same 67 plus 40
+lifecycle/server checks). Both new test projects built without warnings/errors.
+
+Existing saved-state/journal/packet checks (143 per original runtime) and the
+source-linked item-state checks (88) also pass. Final API checks on both roles
+cover 1,897 direct game references, 58 explicit Harmony contracts, 47 existing
+private bindings, hotbar fields and 13 dynamic contracts. Diagnostic static checks
+cover 122 public game accesses and seven passive callbacks.
+
+At that stage, still required in real game sessions: client/host/dedicated On/Off config reload,
+actual shortcut/HUD recording (shortcuts superseded above), switching Off during a trace, disconnect/world
+transition cleanup, legacy DLL detection, matching server report/client transaction
+IDs, and confirming identical Orb contents/animal counts with diagnostics On/Off.
+Large-world marker-scan timing and actual transport/multiplayer behavior are untested.
+No Release ZIP, version bump, commit, push or publishing was performed for this patch.
+
 ## Automatic ground-stack patch composition (2026-10-27)
 
 Replaces the 1.1.9 blanket rejection of foreign `ItemDrop.AutoStackItems`

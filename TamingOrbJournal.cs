@@ -26,6 +26,8 @@ internal sealed class TamingOrbJournal : IDisposable
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly object _gate = new();
     private readonly FileStream _stream;
+    private FileStream? _sharedLease;
+    private FileStream? _legacyGuard;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Entry> _blockingReleases = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Entry> _pendingCaptures = new(StringComparer.Ordinal);
@@ -55,6 +57,7 @@ internal sealed class TamingOrbJournal : IDisposable
     }
 
     internal long WorldUid { get; }
+    internal string FilePath => _stream.Name;
 
     internal bool IsHealthy
     {
@@ -108,6 +111,172 @@ internal sealed class TamingOrbJournal : IDisposable
             error = "Orb journal could not be opened: " + ex.Message;
             return false;
         }
+    }
+
+    // A profile's old journal remains a backup. Once the shared journal advances,
+    // that backup must be an exact, fully validated prefix, never a separate branch.
+    // The lease serializes import/open and remains held while this world is active.
+    internal static bool TryOpenShared(
+        string sharedDirectory,
+        string legacyDirectory,
+        long worldUid,
+        out TamingOrbJournal? journal,
+        out string status,
+        out string error)
+    {
+        journal = null;
+        status = "blocked";
+        error = string.Empty;
+        FileStream? lease = null, legacy = null, shared = null;
+        string? temporaryPath = null;
+        bool ownsTemporary = false;
+        try
+        {
+            string filename = worldUid.ToString(CultureInfo.InvariantCulture) + ".journal";
+            string sharedPath = Path.GetFullPath(Path.Combine(sharedDirectory, filename));
+            string legacyPath = Path.GetFullPath(Path.Combine(legacyDirectory, filename));
+            StringComparison comparison = Path.DirectorySeparatorChar == '\\'
+                ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            bool samePath = sharedPath.Equals(legacyPath, comparison);
+            Directory.CreateDirectory(Path.GetDirectoryName(sharedPath)!);
+            // Keep the lock file after closing: deleting it would let another
+            // process lock a new inode while an existing lease still uses the old one.
+            lease = new FileStream(sharedPath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            shared = OpenExistingJournal(sharedPath, FileAccess.ReadWrite);
+            if (!samePath) legacy = OpenExistingJournal(legacyPath, FileAccess.Read);
+
+            // Reuse the journal's full format, world, checksum and transition checks.
+            // This validator owns no lease and is discarded while its stream is
+            // retained below to prevent a parallel legacy writer in this profile.
+            if (legacy != null) _ = new TamingOrbJournal(legacy, worldUid, created: false);
+            if (shared != null)
+            {
+                var opened = new TamingOrbJournal(shared, worldUid, created: false);
+                if (legacy != null && !IsExactPrefix(legacy, shared))
+                    throw new InvalidDataException("Legacy and shared Orb journals conflict. The legacy file is not a prefix of the shared history; neither file was replaced or merged.");
+                journal = opened;
+                status = samePath ? "same_path" : legacy == null ? "shared_existing" : "shared_with_legacy_prefix";
+            }
+            else if (legacy != null)
+            {
+                temporaryPath = sharedPath + ".import-" + Guid.NewGuid().ToString("N") + ".tmp";
+                using (var temporary = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+                {
+                    ownsTemporary = true;
+                    legacy.Position = 0;
+                    legacy.CopyTo(temporary);
+                    temporary.Flush(flushToDisk: true);
+                    temporary.Position = 0;
+                    _ = new TamingOrbJournal(temporary, worldUid, created: false);
+                }
+                // Same-directory publication is atomic and refuses to overwrite a
+                // target that appeared after the initial open attempt.
+                File.Move(temporaryPath, sharedPath);
+                ownsTemporary = false;
+                shared = new FileStream(sharedPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read);
+                journal = new TamingOrbJournal(shared, worldUid, created: false);
+                status = "migrated";
+            }
+            else
+            {
+                // Only a genuinely absent journal starts a new history. An empty,
+                // malformed, inaccessible or conflicting existing file never does.
+                shared = new FileStream(sharedPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+                journal = new TamingOrbJournal(shared, worldUid, created: true);
+                status = samePath ? "same_path" : "created_new";
+            }
+
+            journal._sharedLease = lease;
+            journal._legacyGuard = legacy;
+            shared = null; legacy = null; lease = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            journal = null;
+            status = "blocked";
+            error = "Orb journal storage could not be opened: " + ex.Message;
+            return false;
+        }
+        finally
+        {
+            CloseQuietly(shared);
+            CloseQuietly(legacy);
+            CloseQuietly(lease);
+            if (ownsTemporary && temporaryPath != null)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (Exception) { /* Only this invocation's unpublished copy; never delete a journal. */ }
+            }
+        }
+    }
+
+    private static FileStream? OpenExistingJournal(string path, FileAccess access)
+    {
+        try { return new FileStream(path, FileMode.Open, access, FileShare.Read); }
+        catch (FileNotFoundException) { RequireMissingPath(path); return null; }
+        catch (DirectoryNotFoundException) { RequireMissingPath(path); return null; }
+    }
+
+    private static void RequireMissingPath(string path)
+    {
+        // File.Exists masks access/I/O errors. Also, FileStream may report a
+        // missing directory when an ancestor is actually a regular file.
+        string? current = path;
+        while (current != null)
+        {
+            try
+            {
+                FileAttributes attributes = File.GetAttributes(current);
+                if (current == path || (attributes & FileAttributes.Directory) == 0)
+                    throw new IOException("Orb journal path exists but cannot be opened as a file: " + path);
+                return;
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            current = Path.GetDirectoryName(current);
+        }
+        throw new DirectoryNotFoundException("Orb journal filesystem root is unavailable: " + path);
+    }
+
+    private static bool IsExactPrefix(FileStream legacy, FileStream shared)
+    {
+        if (legacy.Length > shared.Length) return false;
+        byte[] left = new byte[64 * 1024], right = new byte[64 * 1024];
+        legacy.Position = 0;
+        shared.Position = 0;
+        try
+        {
+            long remaining = legacy.Length;
+            while (remaining > 0)
+            {
+                int count = legacy.Read(left, 0, (int)Math.Min(left.Length, remaining));
+                if (count == 0) throw new EndOfStreamException("Legacy Orb journal changed during comparison.");
+                int read = 0;
+                while (read < count)
+                {
+                    int part = shared.Read(right, read, count - read);
+                    if (part == 0) throw new EndOfStreamException("Shared Orb journal changed during comparison.");
+                    read += part;
+                }
+                for (int i = 0; i < count; i++) if (left[i] != right[i]) return false;
+                remaining -= count;
+            }
+            return true;
+        }
+        finally
+        {
+            // TrySave appends at the current stream position. Never leave it at
+            // the end of the shorter legacy prefix and overwrite newer receipts.
+            legacy.Position = legacy.Length;
+            shared.Position = shared.Length;
+        }
+    }
+
+    private static void CloseQuietly(FileStream? stream)
+    {
+        try { stream?.Dispose(); }
+        catch (Exception) { }
     }
 
     internal bool TryGet(string transactionId, out Entry? entry)
@@ -220,7 +389,17 @@ internal sealed class TamingOrbJournal : IDisposable
                 _error = "Orb journal is closed.";
             }
 
-            _stream.Dispose();
+            try { _stream.Dispose(); }
+            finally
+            {
+                try { _legacyGuard?.Dispose(); }
+                finally
+                {
+                    _legacyGuard = null;
+                    _sharedLease?.Dispose();
+                    _sharedLease = null;
+                }
+            }
         }
     }
 

@@ -86,6 +86,7 @@
         <Reference Include="System"/>
         <Reference Include="System.Core"/>
         <Reference Include="System.Data"/>
+        <Reference Include="System.Runtime.Serialization"/>
         <Reference Include="System.Xml"/>
         <Reference Include="UnityEngine">
             <HintPath>$(CorlibPath)\UnityEngine.dll</HintPath>
@@ -155,6 +156,11 @@
         <Compile Include="TamingOrbIconSystem.cs"/>
         <Compile Include="TamingOrbNetworkSystem.cs"/>
         <Compile Include="TamingOrbRecovery.cs"/>
+        <Compile Include="TamingOrbDiagnostics.cs"/>
+        <Compile Include="OrbDiagnostics\OrbDiagnosticsController.cs"/>
+        <Compile Include="OrbDiagnostics\PassiveTrace.cs"/>
+        <Compile Include="OrbDiagnostics\OrbDataReader.cs"/>
+        <Compile Include="OrbDiagnostics\DiagnosticReport.cs"/>
         <Compile Include="TamingOrbItemState.cs"/>
         <Compile Include="TamingOrbJournal.cs"/>
         <Compile Include="TamingOrbSystem.cs"/>

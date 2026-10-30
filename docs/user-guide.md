@@ -227,7 +227,15 @@ A filled orb overlays the captured creature on the green orb icon. Rendered icon
 
 Orb operations retain a saved pending state until the server confirms their result. Moving an orb between inventory slots does not lose this state. If a pending orb is dropped, transferred, or recovered after reconnecting, use it to check the saved result before attempting another capture or release. An uncertain result keeps the contents protected instead of spawning another creature.
 
-The server and every client must use the same build. The server stores operation receipts under `BepInEx/config/FeedLikeGrandma/orb-transactions/`, separately for each world. Keep these files with world backups; do not delete them to reset a pending orb. Recovery after a server restart requires matching world evidence. In particular, an unacknowledged capture across a server restart is kept pending when durable deletion cannot be proven. Already duplicated creatures and inconsistent orbs from earlier builds are not automatically repaired.
+The server and every client must use the same build. The host/server stores operation receipts in `<Valheim local save root>/FeedLikeGrandma/orb-transactions/<world UID>.journal`. On Windows the default root is `%USERPROFILE%/AppData/LocalLow/IronGate/Valheim`; a dedicated server's `-savedir` is respected. Profiles using the same save root and world share this journal. Ordinary connecting clients do not open or migrate the server's journal. Configuration, YAML and icon caches remain in the profile.
+
+On the first Orb transaction/recovery for a world, the host/server automatically checks its current profile's old `BepInEx/config/FeedLikeGrandma/orb-transactions/<world UID>.journal`. If the shared file is absent, a valid old journal is copied through a flushed, validated temporary file without overwriting an existing target. The original is kept. If both exist, the old journal must be identical to, or an exact validated beginning of, the shared history. This allows the shared journal to acquire new transactions after migration while preserving the old backup. A longer, divergent, damaged or inaccessible history blocks that world's Orb transactions without replacing either journal. Only that world's file is considered; other profiles are not searched or merged.
+
+The log reports `Orb journal migrated`, `shared_existing`, `shared_with_legacy_prefix` or `created_new` with the world and both paths. Installing the DLL or opening the menu alone does not trigger migration. If the only old journal is in a profile you no longer use, keep both copies backed up and transfer that exact world file to the current profile's legacy directory **with all game/server processes stopped**, before its first shared journal is created. If a shared journal already exists or the histories conflict, retain both for review; do not overwrite, concatenate, clear pending data, or choose by modification date.
+
+Keep the **active shared journal** with world backups; the old profile copy stops updating after migration. Do not delete journals to reset a pending Orb. Different independent copies of a world can retain the same UID, so use separate save roots for independent servers/copies. The `.journal.lock` file is a coordination file, not a second journal; its presence after exit is normal. Updated processes prevent concurrent writes to the shared history and the current legacy source while open. Do not run an old FLG build against a stale profile journal after migration, including another profile which the new process cannot inspect. Custom journal files are not automatically Steam Cloud-synced by this change.
+
+Recovery after a server restart still requires matching world evidence. In particular, an unacknowledged capture across a server restart is kept pending when durable deletion cannot be proven. Already missing records, duplicated creatures and inconsistent orbs from earlier builds are not automatically repaired.
 
 Default recipe and station:
 
@@ -247,6 +255,33 @@ The Valheim `TamingBoost` status effect is integrated with all FeedLikeGrandma p
 - Manual and automatic feed-effect multiplier, default `x1.5`
 
 For passive growth and automatic feeding, any player with TamingBoost within 60 meters is enough; bonuses do not stack per player. Manual feeding checks the player performing the feed. The MeadTamer item and `Potion_tamer` status-effect tooltips show the active multipliers.
+
+## Orb diagnostics
+
+Client and server Orb diagnostics are included in `FeedLikeGrandma.dll`. They observe existing operations; they do not repair an Orb, create a creature, alter item/world data, or send additional recovery requests.
+
+In `BepInEx/config/sighsorry.FeedLikeGrandma.cfg`, use:
+
+```ini
+[Debug]
+OrbDiagnostics = On
+```
+
+The default is `Off`. This is the only diagnostic control: no hotkeys or additional settings are needed. It is local and is not controlled by server configuration sync. Config edits apply while the game/server is running. Switching Off saves/stops an active trace and removes its observation hooks; ordinary error messages and throttled failure-reason logs remain available. With diagnostics Off there are no diagnostic inventory snapshots, packet copies, or detailed server marker scans. Old `OrbDiagnosticsDumpKey`/`OrbDiagnosticsTraceKey` entries, if retained in an existing config, are no longer used.
+
+- **Client:** place the affected Orb and, if available, a working Orb in your inventory and note their slots. Set `On`, enter a world if necessary, and use the Orbs normally to reproduce the problem. Orb use or related Orb traffic starts recording automatically, including the triggering event and a before snapshot. Set `Off` to save the report with an after snapshot. Disconnect, world change or 60 seconds also ends/saves a trace; if still On in a world, the next Orb activity starts another one. After disconnect the player inventory may be unavailable; on a switch to a different world the after snapshot is omitted to avoid mixing worlds. Waiting before the first Orb attempt does not consume the 60-second window. An idle On session without Orb activity creates no report.
+- **Server:** enable the setting on the server and retry the affected Orb. Detailed `[OrbServerDiagnostics v1]` reports appear in `BepInEx/LogOutput.log` for a rejected release with a previous completed release record. They include the active/legacy journal paths, storage status and whether the requested transaction exists. An `unknown` recovery reply also logs `[OrbJournalDiagnostics v1]` with those facts without scanning world data or retrying recovery. Each report type is limited to once per 30 seconds across all Orbs. Other failure paths may have only an `[OrbFailure]` reason and a client trace; no detailed report is not evidence that the Orb is healthy.
+- **Local host:** one local setting enables both roles. A separate dedicated-server process has its own config. Enabling diagnostics on a connecting client never enables the remote server's diagnostics.
+
+Send the matching `.txt` and `.json` files from `BepInEx/config/FeedLikeGrandma/diagnostics`, the same session's `LogOutput.log` (including the host/server log when available), and the Orb slots and attempt time. Gale users should use the actual running profile's folders; a custom BepInEx config directory is respected. New reports use this location. Earlier reports under `BepInEx/FeedLikeGrandmaDiagnostics/reports` are left untouched and are not automatically moved. No console option or devcommands is required. Reports are stored locally and are not uploaded; JSON can include creature names and world/transaction identifiers.
+
+The server report reads current resident world data without loading zones. Missing markers do not prove that an animal died or disappeared. One detailed scan can cost more in a larger world, so turn diagnostics Off after collecting the report. Client tracing uses limits of 60 seconds, 600 events and 2 MiB of copied packets. While On, lightweight entry hooks wait for Orb activity; inventory snapshots and packet copies are not taken every frame or while idle. Only the diagnostic hooks are removed on Off/disconnect, and Orb operation results are unchanged.
+
+The client report folder holds at most **20 report pairs and 128 MiB of files** before further saves are blocked. Existing evidence is never automatically deleted. A lone `.txt` or `.json` counts as a report; other files and leftover temporary files consume the byte budget. Only that folder's top-level files are counted, not subfolders. The empty `.reports.lock` file coordinates writers and normally remains after exit. These limits apply to client report files, not the server's existing BepInEx log rotation.
+
+If saving fails (including full storage), the current report stays in memory and new traces pause. Fix the path/permissions or move old reports to a different folder, then switch **Off → On** once to retry before exiting. There is no repeated per-frame retry and the pending evidence is not replaced by another trace. An exit/crash before a successful save can lose that unsaved report. Collect both file formats and turn diagnostics Off after reproducing the problem.
+
+If previously installed, remove `FeedLikeGrandma.OrbDiagnostics.dll` and `FeedLikeGrandma.OrbServerDiagnostics.dll` from the relevant profile/server **while it is stopped**, then restart. If either standalone plugin remains loaded, the matching built-in diagnostic role is skipped to prevent duplicate observations. The Debug setting cannot disable an old standalone plugin, and FLG does not remove its files or patches.
 
 ## Riding improvements
 
