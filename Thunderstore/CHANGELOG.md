@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.2
+
+- Support EpicLoot ground stacking with the inspected ItemDataManager copies bundled in BowsBeforeHoes, ValheimCuisine, AzuCraftyBoxes and BetterSleepBruh, without requiring PoVPlus.Compat. Preserve each active copy's stacking policy and custom data instead of replacing the whole metadata dictionary.
+- Keep Feed Barrel food separate from ordinary drops and retain EpicLoot's magic-item restrictions. All participating data policies must accept a pair before data is committed; unknown stored manager types, missing keys, conflicting results or unexpected item changes prevent that pair from merging.
+- Discover active managers through ground-stack patches or complete inventory patch pairs, including when another compatibility plugin removed only the ground patch. Other mods' patches remain installed; relevant method contracts and active registrations are checked instead of fixed versions or whole-DLL hashes.
+- Coordinate with the updated FineDining so it alone composes ItemDataManager data and food expiry when both mods are present. Handle pending initialization, late registration and cleanup without duplicate merging; defer an in-progress call when its route changes. Unsupported or incomplete contracts pause the affected path before item changes.
+- Update FeedLikeGrandma on the host/server and every client, then restart. If using FineDining together with EpicLoot and ItemDataManager, also install its coordinated compatibility update; older FineDining builds without that contract remain blocked. No new setting, saved format or Orb protocol is introduced. Added isolated client/server regression coverage; actual game and multiplayer verification remains pending.
+
 ## 1.2.1
 
 - Support EpicLoot's replacement ground-stack routine while keeping Feed Barrel food separate from ordinary drops and preserving EpicLoot's magic-item restrictions. Animals continue to eat physical food normally; no compatibility setting is required.

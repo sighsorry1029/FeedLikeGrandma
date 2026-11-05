@@ -11,8 +11,8 @@ using UnityEngine;
 
 namespace FeedLikeGrandma;
 
-// FLG owns only the world-drop marker boundary. FineDining independently owns
-// expiry composition, including when FLG is absent. Never insert its callback.
+// FLG owns the world-drop marker boundary and delegates ItemDataManager policy
+// to each active provider. FineDining independently owns expiry; never repeat it.
 internal static class FeedEpicLootStackCompatibility
 {
     private const string HarmonyId = "sighsorry.FeedLikeGrandma.EpicLootStacks";
@@ -24,10 +24,21 @@ internal static class FeedEpicLootStackCompatibility
     private const BindingFlags Declared = BindingFlags.Static | BindingFlags.Instance |
         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
     private static readonly MethodInfo TranspilerMethod = typeof(FeedEpicLootStackCompatibility).GetMethod(nameof(Transpiler), Declared)!;
+    private static readonly MethodInfo DataEntryMethod = typeof(FeedEpicLootStackCompatibility).GetMethod(nameof(BeforeReplacement), Declared)!;
+    private static readonly MethodInfo DataComposeMethod = typeof(FeedEpicLootStackCompatibility).GetMethod(nameof(ComposeItemData), Declared)!;
+    private static readonly MethodInfo OriginalTarget = AccessTools.DeclaredMethod(typeof(ItemDrop), "AutoStackItems", Type.EmptyTypes);
     private static Harmony? _harmony;
-    private static MethodInfo? _prefix, _filter, _fineOriginal, _fineTranspiler, _fineEntry, _fineClock, _compose;
+    private static MethodInfo? _prefix, _filter, _fineOriginal, _fineTranspiler, _fineEntry, _fineClock, _compose, _fineDataCompose, _fineDataActive;
     private static MethodInfo[] _epicHelpers = Array.Empty<MethodInfo>();
-    private static bool _composed, _validatedExpiry;
+    private static bool _composed, _validatedExpiry, _validatedFineData;
+    private static Func<bool>? _fineDataIsActive;
+    private static FeedItemDataStackCompatibility.Provider[] _providers = Array.Empty<FeedItemDataStackCompatibility.Provider>();
+    private static Patch[] _dataPatches = Array.Empty<Patch>();
+    private static bool _dataGuardInstalled;
+    private static bool _delegateItemData;
+    private static int _routeRevision;
+    private static string? _dataFailure;
+    private static bool OwnsItemData => _providers.Length != 0 && !_delegateItemData;
     internal static bool IsInstalled => _harmony != null;
 
     // Only relevant method bodies are fingerprinted. DLL versions/MVIDs/tokens,
@@ -64,6 +75,7 @@ internal static class FeedEpicLootStackCompatibility
             if (_prefix != null) Shutdown();
             return entry != null || clocks.Length != 0;
         }
+        Require(_dataFailure == null, _dataFailure ?? "ItemDataManager replacement guard failed");
         Require(!epic.wrapTryCatch, "EpicLoot prefix exception policy changed");
         Require(entry == null || !epic.before.Contains(FineEntryOwner), "EpicLoot conflicts with the FineDining entry order");
         MethodInfo prefix = epic.PatchMethod;
@@ -80,17 +92,42 @@ internal static class FeedEpicLootStackCompatibility
         }
         Require(patches.Postfixes.Count == 0 && patches.Finalizers.Count == 0 && patches.ILManipulators.Count == 0,
             "uninspected AutoStackItems wrapper");
+        var dataPatches = new List<Patch>();
         foreach (Patch patch in patches.Transpilers)
         {
             if (patch.owner == DropOwner && patch.PatchMethod.DeclaringType == typeof(FeedBarrelDropProtection) &&
                 patch.PatchMethod.Name == "Transpiler") continue;
-            Require(patch.owner == FineOwner && patch.PatchMethod == fine && !patch.wrapTryCatch,
-                "transpiler bypassed by EpicLoot replacement");
+            if (patch.owner == FineOwner && patch.PatchMethod == fine && !patch.wrapTryCatch) continue;
+            dataPatches.Add(patch);
         }
+        FeedItemDataStackCompatibility.AddInventoryProviders(dataPatches);
+        // Old FineDining independently refuses this route. A cooperating build
+        // declares and validates its own merge callback; FLG then only filters.
+        Require(dataPatches.Count == 0 || fine == null || _fineDataCompose != null,
+            "EpicLoot with ItemDataManager also needs a FineDining-side compatibility update; its safety checks are retained");
+        bool dataChanged = dataPatches.Count != _dataPatches.Length ||
+            dataPatches.Where((patch, index) => index >= _dataPatches.Length || !SamePatch(patch, _dataPatches[index])).Any();
+        FeedItemDataStackCompatibility.Provider[] providers = dataChanged
+            ? FeedItemDataStackCompatibility.Bind(dataPatches) : _providers;
+        bool delegateItemData = _fineDataCompose != null;
         if (fine != null && requireExpiry) Require(entry != null, "FineDining expiry guard is not ready; update both mods and restart");
         if (_prefix != null)
         {
             Require(_prefix == prefix && _filter == filter, "active EpicLoot route changed; restart to rebind");
+            if (dataChanged || _delegateItemData != delegateItemData)
+            {
+                _providers = providers; _dataPatches = dataPatches.ToArray(); _composed = false;
+                _delegateItemData = delegateItemData;
+                _routeRevision++;
+                bool needsGuard = providers.Length != 0;
+                if (needsGuard != _dataGuardInstalled)
+                {
+                    _dataGuardInstalled = needsGuard;
+                    if (needsGuard) _harmony!.Patch(prefix, prefix: new HarmonyMethod(DataEntryMethod) { priority = Priority.First });
+                    else _harmony!.Unpatch(prefix, DataEntryMethod);
+                }
+                else _harmony!.Patch(prefix);
+            }
             ValidateInstalled(requireExpiry);
             return true;
         }
@@ -99,10 +136,15 @@ internal static class FeedEpicLootStackCompatibility
         Require(filter == typeof(FeedBarrelDropProtection).GetMethod("FilterStackCandidate", Declared), "FLG candidate filter binding");
         ValidateCallbackPatches(Harmony.GetPatchInfo(prefix), requireOwn: false, requireExpiry: false);
         _prefix = prefix; _filter = filter; _epicHelpers = helpers;
+        _providers = providers; _dataPatches = dataPatches.ToArray(); _delegateItemData = delegateItemData;
+        _dataGuardInstalled = providers.Length != 0;
         try
         {
             _harmony = new Harmony(HarmonyId);
-            _harmony.Patch(prefix, transpiler: new HarmonyMethod(TranspilerMethod)
+            _routeRevision++;
+            _harmony.Patch(prefix,
+                prefix: _dataGuardInstalled ? new HarmonyMethod(DataEntryMethod) { priority = Priority.First } : null,
+                transpiler: new HarmonyMethod(TranspilerMethod)
                 { priority = Priority.Last, before = new[] { FineBridgeOwner } });
             ValidateInstalled(requireExpiry);
         }
@@ -110,11 +152,65 @@ internal static class FeedEpicLootStackCompatibility
         return true;
     }
 
+    // Once the provider route is active, check it at each actual stack operation,
+    // including operations with no barrel nearby. Reflection/IL binding is cached.
+    private static bool BeforeReplacement(bool __runOriginal, bool __1, ref bool __result)
+    {
+        // __1 is EpicLoot's original-game veto argument; __runOriginal belongs
+        // to this nested Harmony wrapper. Neither veto may be overridden.
+        if (!__runOriginal || !__1 || _dataFailure != null) { __result = false; return false; }
+        try
+        {
+            int revision = _routeRevision;
+            Patches patches = Harmony.GetPatchInfo(OriginalTarget);
+            Ensure(patches, _filter!, requireExpiry: false);
+            // Rebinding here cannot replace the remainder of this already-running
+            // wrapper. Skip this call; the next one enters the new guarded body.
+            if (revision != _routeRevision || (_fineOriginal != null &&
+                (!patches.Prefixes.Any(patch => patch.owner == FineEntryOwner && patch.PatchMethod == _fineEntry) ||
+                 !_validatedExpiry || (_delegateItemData && _providers.Length != 0 && !_validatedFineData))))
+            { __result = false; return false; }
+            return true;
+        }
+        catch (Exception error)
+        {
+            _dataFailure = error.GetBaseException().Message;
+            try { FeedLikeGrandmaPlugin.Log.LogWarning("EpicLoot ItemDataManager ground stacking paused before item changes. " + _dataFailure); }
+            catch (Exception) { }
+            __result = false;
+            return false;
+        }
+    }
+
+    private static bool ComposeItemData(ItemDrop receiver, ItemDrop candidate)
+        => _dataFailure == null && OwnsItemData && FeedItemDataStackCompatibility.TryCompose(receiver, candidate, _providers);
+
+    private static bool SamePatch(Patch left, Patch right) => left.index == right.index && left.owner == right.owner &&
+        left.PatchMethod == right.PatchMethod && left.priority == right.priority && left.wrapTryCatch == right.wrapTryCatch &&
+        left.before.SequenceEqual(right.before) && left.after.SequenceEqual(right.after);
+
+    // FineDining calls this after installing its operation-boundary guard. FLG
+    // removes only its data call. Its entry guard stays while providers exist,
+    // so a later FineDining teardown cannot leave ordinary stacks unguarded.
+    internal static void YieldItemDataOwnership()
+    {
+        if (_prefix == null) return;
+        Patches patches = Harmony.GetPatchInfo(OriginalTarget);
+        MethodInfo? fine = patches.Transpilers.SingleOrDefault(patch => patch.owner == FineOwner)?.PatchMethod;
+        RefreshFineBinding(fine);
+        Require(_fineDataCompose != null && patches.Prefixes.Any(patch => patch.owner == FineEntryOwner && patch.PatchMethod == _fineEntry),
+            "FineDining must install its entry guard before taking ItemDataManager ownership");
+        // Also synchronize late-added/removed providers while already delegated.
+        // This does not call FineDining.Ensure, so handoff cannot recurse.
+        Ensure(patches, _filter!, requireExpiry: false);
+    }
+
     private static void RefreshFineBinding(MethodInfo? fine)
     {
         if (_fineOriginal == fine) return;
         _composed = false;
         _fineOriginal = null; _fineTranspiler = null; _fineEntry = null; _fineClock = null; _compose = null;
+        _fineDataCompose = null; _fineDataActive = null; _fineDataIsActive = null;
         if (fine == null) return;
         Require(fine.DeclaringType?.FullName == "FineDining.ItemDropAutoStackSpoilagePatch" && fine.Name == "Transpiler" &&
             HasSignature(fine, typeof(IEnumerable<CodeInstruction>), typeof(IEnumerable<CodeInstruction>)), "FineDining original stack patch");
@@ -123,6 +219,13 @@ internal static class FeedEpicLootStackCompatibility
         _fineTranspiler = Method(bridge!, "Transpiler", typeof(IEnumerable<CodeInstruction>), typeof(IEnumerable<CodeInstruction>));
         _fineEntry = Method(bridge!, "BeforeAutoStack", typeof(bool), typeof(bool));
         Require(_fineEntry.GetParameters()[0].Name == "__runOriginal", "FineDining entry binding");
+        if (bridge!.GetMethod("ComposeItemData", Declared) != null)
+        {
+            _fineDataCompose = Method(bridge, "ComposeItemData", typeof(bool), typeof(ItemDrop), typeof(ItemDrop));
+            _fineDataActive = Method(bridge, "get_ItemDataMergeActive", typeof(bool));
+            Require(_fineDataCompose.IsPrivate && _fineDataActive.IsAssembly, "FineDining data bridge access");
+            _fineDataIsActive = (Func<bool>)Delegate.CreateDelegate(typeof(Func<bool>), _fineDataActive);
+        }
         Type? clock = fine.DeclaringType.Assembly.GetType("FineDining.ItemDropClockReadinessPatch");
         if (clock != null)
         {
@@ -179,6 +282,21 @@ internal static class FeedEpicLootStackCompatibility
         try { if (Fingerprint(code) != PrefixContract || _filter == null) return code; }
         catch (Exception) { return code; }
         int lookup = code.FindIndex(IsCandidateLookup);
+        if (OwnsItemData)
+        {
+            // The inspected Epic body checks capacity and magic compatibility
+            // before this increment. A refusal takes its existing candidate skip.
+            int store = code.FindIndex(instruction => instruction.opcode == OpCodes.Stfld && instruction.operand is FieldInfo field &&
+                field.DeclaringType == typeof(ItemDrop.ItemData) && field.Name == "m_stack");
+            int start = store - 7;
+            Label? skip = null;
+            Require(start > lookup && code[start - 1].Branches(out skip) && skip.HasValue,
+                "ItemDataManager merge insertion point");
+            var receiver = new CodeInstruction(OpCodes.Ldarg_0);
+            receiver.labels.AddRange(code[start].labels); code[start].labels.Clear();
+            code.InsertRange(start, new[] { receiver, new CodeInstruction(OpCodes.Ldloc, LocalIndex(code[lookup + 1])),
+                new CodeInstruction(OpCodes.Call, DataComposeMethod), new CodeInstruction(OpCodes.Brfalse, skip!.Value) });
+        }
         code.InsertRange(lookup + 1, new[] { new CodeInstruction(OpCodes.Ldarg_0), new CodeInstruction(OpCodes.Call, _filter) });
         return code;
     }
@@ -190,7 +308,11 @@ internal static class FeedEpicLootStackCompatibility
             Require(!requireOwn && (!requireExpiry || _fineOriginal == null), "missing EpicLoot replacement hooks");
             return false;
         }
-        Require(info.Prefixes.Count == 0 && info.Postfixes.Count == 0 && info.Finalizers.Count == 0 && info.ILManipulators.Count == 0,
+        int expectedGuard = requireOwn && _dataGuardInstalled ? 1 : 0;
+        Require(info.Prefixes.Count == expectedGuard && info.Prefixes.All(patch =>
+                patch.owner == HarmonyId && patch.PatchMethod == DataEntryMethod && !patch.wrapTryCatch &&
+                patch.priority == Priority.First && patch.before.Length == 0 && patch.after.Length == 0) &&
+            info.Postfixes.Count == 0 && info.Finalizers.Count == 0 && info.ILManipulators.Count == 0,
             "uninspected EpicLoot replacement wrapper");
         int own = 0, expiry = 0;
         foreach (Patch patch in info.Transpilers)
@@ -206,6 +328,7 @@ internal static class FeedEpicLootStackCompatibility
         if (_fineOriginal != null)
         {
             RequireUnpatched(_fineTranspiler!); RequireUnpatched(_compose!);
+            if (_fineDataCompose != null) { RequireUnpatched(_fineDataCompose); RequireUnpatched(_fineDataActive!); }
         }
         return expiry == 1;
     }
@@ -214,13 +337,38 @@ internal static class FeedEpicLootStackCompatibility
     {
         bool expiry = ValidateCallbackPatches(Harmony.GetPatchInfo(_prefix!), requireOwn: true, requireExpiry: requireExpiry);
         foreach (MethodInfo method in _epicHelpers) RequireUnpatched(method);
-        if (_composed && _validatedExpiry == expiry) return;
+        FeedItemDataStackCompatibility.Validate(_providers);
+        if (_dataGuardInstalled) RequireUnpatched(DataEntryMethod);
+        if (OwnsItemData) RequireUnpatched(DataComposeMethod);
+        bool fineData = _fineDataIsActive?.Invoke() ?? false;
+        Require(!fineData || _delegateItemData, "duplicate ItemDataManager merge owners");
+        Require(_providers.Length == 0 || !_delegateItemData || !requireExpiry || (fineData && expiry),
+            "FineDining ItemDataManager bridge is not ready");
+        // Its transpiler can be rebuilt without changing the descriptor list.
+        // Query the cheap ownership state as well before reusing composed IL.
+        if (_composed && _validatedExpiry == expiry && _validatedFineData == fineData) return;
         List<CodeInstruction> code = PatchProcessor.GetCurrentInstructions(_prefix!);
         int lookup = code.FindIndex(IsCandidateLookup);
         Require(lookup >= 0 && code.Count(instruction => instruction.Calls(_filter!)) == 1 &&
             code[lookup + 1].opcode == OpCodes.Ldarg_0 && code[lookup + 2].Calls(_filter!), "EpicLoot candidate guard absent or moved");
         RequireNoEntry(code[lookup + 1]); RequireNoEntry(code[lookup + 2]);
         code.RemoveRange(lookup + 1, 2);
+        if (OwnsItemData)
+        {
+            int call = code.FindIndex(instruction => instruction.Calls(DataComposeMethod));
+            int store = code.FindIndex(instruction => instruction.opcode == OpCodes.Stfld && instruction.operand is FieldInfo field &&
+                field.DeclaringType == typeof(ItemDrop.ItemData) && field.Name == "m_stack");
+            Require(!expiry && call >= 3 && call == store - 9 &&
+                code.Count(instruction => instruction.Calls(DataComposeMethod)) == 1 &&
+                code[call - 2].opcode == OpCodes.Ldarg_0 && code[call - 1].IsLdloc() &&
+                LocalIndex(code[call - 1]) == LocalIndex(code[lookup + 1]) &&
+                code[call + 1].opcode == OpCodes.Brfalse && code[call - 3].Branches(out Label? skip) &&
+                skip.HasValue && Equals(code[call + 1].operand, skip.Value), "ItemDataManager guard missing, duplicated or moved");
+            RequireNoEntry(code[call - 1]); RequireNoEntry(code[call]); RequireNoEntry(code[call + 1]);
+            Require(code[call - 2].blocks.Count == 0, "ItemDataManager guard exception entry");
+            code[call + 2].labels.AddRange(code[call - 2].labels);
+            code.RemoveRange(call - 2, 4);
+        }
         if (expiry)
         {
             int call = code.FindIndex(instruction => instruction.Calls(_compose!));
@@ -234,16 +382,33 @@ internal static class FeedEpicLootStackCompatibility
             code[call + 1].labels.AddRange(code[call - 2].labels);
             code.RemoveRange(call - 2, 3);
         }
+        if (fineData)
+        {
+            int call = code.FindIndex(instruction => instruction.Calls(_fineDataCompose!));
+            int store = code.FindIndex(instruction => instruction.opcode == OpCodes.Stfld && instruction.operand is FieldInfo field &&
+                field.DeclaringType == typeof(ItemDrop.ItemData) && field.Name == "m_stack");
+            Require(call >= 3 && call == store - 9 && code.Count(instruction => instruction.Calls(_fineDataCompose!)) == 1 &&
+                code[call - 2].opcode == OpCodes.Ldarg_0 && code[call - 1].IsLdloc() &&
+                LocalIndex(code[call - 1]) == LocalIndex(code[lookup + 1]) &&
+                code[call + 1].opcode == OpCodes.Brfalse && code[call - 3].Branches(out Label? skip) &&
+                skip.HasValue && Equals(code[call + 1].operand, skip.Value), "FineDining ItemDataManager guard missing, duplicated or moved");
+            RequireNoEntry(code[call - 1]); RequireNoEntry(code[call]); RequireNoEntry(code[call + 1]);
+            Require(code[call - 2].blocks.Count == 0, "FineDining ItemDataManager exception entry");
+            code[call + 2].labels.AddRange(code[call - 2].labels);
+            code.RemoveRange(call - 2, 4);
+        }
         Require(Fingerprint(code) == PrefixContract, "EpicLoot composed replacement flow changed");
-        _composed = true; _validatedExpiry = expiry;
+        _composed = true; _validatedExpiry = expiry; _validatedFineData = fineData;
     }
 
     internal static void Shutdown()
     {
-        _harmony?.UnpatchSelf();
+        if (_harmony != null) { _routeRevision++; _harmony.UnpatchSelf(); }
         _harmony = null; _prefix = null; _filter = null; _fineOriginal = null;
-        _fineTranspiler = null; _fineEntry = null; _fineClock = null; _compose = null;
+        _fineTranspiler = null; _fineEntry = null; _fineClock = null; _compose = null; _fineDataCompose = null; _fineDataActive = null; _fineDataIsActive = null;
         _epicHelpers = Array.Empty<MethodInfo>(); _composed = false;
+        _providers = Array.Empty<FeedItemDataStackCompatibility.Provider>(); _dataPatches = Array.Empty<Patch>();
+        _dataGuardInstalled = false; _delegateItemData = false; _dataFailure = null; _validatedFineData = false;
     }
 
     private static bool IsCandidateLookup(CodeInstruction instruction) => instruction.operand is MethodInfo method &&

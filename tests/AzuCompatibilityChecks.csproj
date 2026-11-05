@@ -22,6 +22,7 @@
     <Compile Include="AzuCompatibilityChecks.cs" />
     <Compile Include="AzuStackCompositionChecks.cs" />
     <Compile Include="EpicLootStackChecks.cs" />
+    <Compile Include="ItemDataStackChecks.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

@@ -14,6 +14,22 @@ import subprocess
 
 if len(sys.argv) not in (5, 6):
     raise SystemExit("Usage: python run_azu_mono.py <original-game-dir> <FeedLikeGrandma.dll> <AzuAutoStore.dll> <BepInEx-core-dir> [composition:<plugin-directory>]")
+if len(sys.argv) == 6 and sys.argv[5].startswith("idm-fine-composition:"):
+    profile = sys.argv[5][len("idm-fine-composition:"):]
+    for case in ("newfine-first", "newfine-last", "newfine-pending", "newfine-cleanup-fine", "newfine-cleanup-flg", "newfine-policies", "newfine-inventory", "newfine-late"):
+        result = subprocess.run([sys.executable, __file__, *sys.argv[1:5], "idm:" + case + ":" + profile])
+        if result.returncode:
+            raise SystemExit(result.returncode)
+    raise SystemExit(0)
+if len(sys.argv) == 6 and sys.argv[5].startswith("idm-composition:"):
+    profile = sys.argv[5][len("idm-composition:"):]
+    for case in ("bows", "cuisine", "crafty", "sleep", "combined", "identity", "changed",
+                 "first", "last", "late", "removed-epic", "fine-first", "fine-last", "policies",
+                 "inventory", "inventory-partial", "inventory-owner", "inventory-removed-ground"):
+        result = subprocess.run([sys.executable, __file__, *sys.argv[1:5], "idm:" + case + ":" + profile])
+        if result.returncode:
+            raise SystemExit(result.returncode)
+    raise SystemExit(0)
 if len(sys.argv) == 6 and sys.argv[5].startswith("epic-composition:"):
     profile = sys.argv[5][len("epic-composition:"):]
     for case in ("plain-first", "plain-last", "fine-alone", "fine-first", "flg-first", "pending-fine", "late-epic", "late-fine", "vanilla-both", "cleanup-flg", "cleanup-fine", "identity", "changed-prefix", "changed-stacks", "changed-raw", "wrapped", "detour", "boundary", "legacy-expiry"):
@@ -44,7 +60,7 @@ if not managed.is_dir():
     managed = game / "valheim_server_Data" / "Managed"
 runtime = game / "MonoBleedingEdge"
 runner = Path(__file__).resolve().parent / "bin" / "azu-compatibility" / "AzuCompatibilityChecks.exe"
-is_composition = sys.argv[5].startswith(("compose:", "epic:"))
+is_composition = sys.argv[5].startswith(("compose:", "epic:", "idm:"))
 if not managed.is_dir() or not all(path.is_file() for path in (runner, flg)) or (not is_composition and not azu.is_file()):
     raise SystemExit("Original Managed directory or built test/input DLL was not found")
 

@@ -1,5 +1,132 @@
 # Regression checks
 
+## Release 1.2.2 (2026-11-05)
+
+- Normal `dotnet build FeedLikeGrandma.csproj -c Release` completed with zero
+  warnings/errors. Assembly `1.2.2.0`, file/BepInPlugin `1.2.2` and manifest
+  `1.2.2` agree; BepInExPack remains `5.4.2360`.
+- Final merged DLL SHA-256:
+  `22465D58F87E9CBF65C0C82E85620970087893470E3818305DD1E1479F688858`.
+  The automatically deployed Steam plugins DLL matches. ServerSync and
+  YamlDotNet are merged; English and Korean resources remain embedded.
+- Thunderstore ZIP passed CRC, exact six-entry set and source-byte checks.
+  Nexus ZIP passed the same checks with only the final plugin DLL.
+- This final Release DLL passed all 1,407 checks / 45 isolated phases on each
+  original Valheim 1.0.21 client/server Mono runtime: IDM 441 / 18,
+  coordinated FineDining 314 / 8, and existing EpicLoot regressions 652 / 19.
+  The paired FineDining fixture remains the fixed `893F5A...` Debug artifact
+  identified below; no claim is made about an untested future FineDining build.
+- Both original API sets passed 1,929 direct references, 58 Harmony contracts,
+  47 private bindings, hotbar fields and 13 dynamic contracts.
+- Release logs: `%TEMP%/flg-release-1.2.2-validation/` (IDM suites) and
+  `%TEMP%/flg-release-1.2.2-root-checks/` (EpicLoot and API checks).
+  `git diff --check` passed. Existing standalone `diagnostics/` is excluded.
+
+The fixture and live-game limitations documented below still apply. Actual
+Unity startup, physical feeding/merging, saves, ownership and multiplayer have
+not been verified. No uploader or store publication check was performed.
+
+## EpicLoot and embedded ItemDataManager copies (2026-11-05, Debug)
+
+FeedLikeGrandma now composes each active ItemDataManager policy into EpicLoot's
+replacement ground-stack routine. The original manager patches remain installed.
+Every policy must accept the same item pair before FLG commits the combined
+GUID-owned data; unrelated data is preserved, and unknown manager namespaces,
+missing keys, conflicting output or input mutation refuse that pair. EpicLoot
+retains its eligibility, ownership, magic-item, quantity, destruction and save
+flow. This adapter does not replace Inventory behavior or change stored formats.
+
+With the coordinated FineDining update, FineDining owns both manager-data and
+expiry composition; FLG owns only its barrel candidate filter. FLG retains its
+operation-boundary guard while providers exist, including during delegation.
+Pending initialization defers a call without a permanent failure latch; changing
+the active route defers the currently executing old wrapper. Later calls use
+the rebuilt route. Removing either bridge does not remove another mod's patches.
+Older FineDining without this shared contract refuses the combined route.
+
+Provider discovery uses active ground transpilers or complete Inventory patch
+pairs. The latter preserves detection when another compatibility mod removes
+only the original ground transpiler. Merely loading a DLL does not initialize
+its bundled manager. Relevant IL is cached until the route changes; active
+patch descriptors are checked at stack boundaries. There are no added physics
+queries or per-frame global searches. Eligible pairs do allocate dictionary
+snapshots and execute the providers' own callbacks; this is not zero-cost.
+Runtime DLL replacement is unsupported.
+
+Inspected copies from the supplied `adfvvv` profile:
+
+| Mod | Version | ItemInfo implementation |
+| --- | --- | --- |
+| BowsBeforeHoes | 2.0.2 | `ItemDataManager.ItemInfo` |
+| ValheimCuisine | 2.3.4 | `ItemDataManager.ItemInfo` |
+| AzuCraftyBoxes | 1.8.28 | `ItemDataManager.ItemInfo` |
+| BetterSleepBruh | 2.1.2 | `Vapok.Common.Managers.ItemInfo` |
+
+EpicLoot plugin 0.15.6 uses the inspected replacement/helper contracts. Version,
+MVID and whole-DLL hash identify evidence, not activation permission. This is a
+narrow contract check, not a proof that arbitrary future code is equivalent.
+
+Final artifacts used by the isolated runs were copied to immutable test inputs:
+
+- FLG Debug, also matching the automatically deployed Steam plugins DLL:
+  `36D4347311D1AC604B6C3B44803508D7C73480EFC217C5CF04D9F14A1525E4A5`.
+- Coordinated FineDining Debug, built by its separately authorized chat:
+  `893F5A210781C33E838AC2B4D6222A1B128F8F20F266CB49489FA5A0FE803F5A`.
+
+Verification against original Valheim 1.0.21 Windows x64 client 26249040 and
+dedicated-server 26266951, on each role's original Mono runtime:
+
+| Suite | Checks per role | Isolated phases per role |
+| --- | ---: | ---: |
+| IDM, FLG alone and old FineDining rejection | 441 | 18 |
+| Coordinated FineDining / FLG ownership | 314 | 8 |
+| Existing EpicLoot composition regressions | 652 | 19 |
+
+Both roles passed all suites: 1,407 checks / 45 phases each. The new IDM suites
+alone total 1,510 checks / 52 phases across the two roles. Coverage includes all
+four real copies, policy acceptance/refusal, preservation of foreign metadata,
+both registration orders, late registration/removal, incomplete inventory pairs,
+ground-patch removal with inventory detection, unrelated version/MVID changes,
+relevant body changes, unknown wrappers, input reference/count mutation, actual
+nested replacement vetoes, pending FineDining startup, ownership handoff and
+independent cleanup. The removed-Epic case cancels the already-running wrapper,
+preserves manager patches and recovers after re-registration.
+
+- Production and test Debug builds: zero warnings/errors. Production command:
+  `dotnet build FeedLikeGrandma.csproj -c Debug -p:DeployToGame=true`.
+- Each original API set: 1,929 direct game references, 58 explicit Harmony
+  contracts, 47 private bindings, hotbar fields and 13 dynamic contracts passed.
+- Source-linked marker/merge policy runner: 24 checks passed.
+- `git diff --check` passed. No version change, Release ZIP, commit or publication
+  was performed. The pre-existing untracked `diagnostics/` remains excluded.
+- Local logs: `%TEMP%/flg-idm-final-36D434-893F5A/`, with client/server
+  `idm-composition`, `idm-fine-composition`, `epic-composition` and `api` logs.
+
+The IDM fixture suppresses plugin startup initializers in memory, retains the
+manager static field initialization and supplies its GUID while suppressing
+broad automatic registration. It uses uninitialized managed ItemDrop shells,
+actual policy bodies and actual Harmony ground-stack composition. Inventory
+discovery cases use explicit Harmony metadata for the real patch methods;
+they do not execute the Unity-dependent Inventory detour. Mutated contract
+variants exist only in test memory. Original game DLLs were never modified,
+publicized or given native Unity stubs. Foreign callback side effects are not
+transactionally rolled back merely because FLG rejects a pair.
+
+Unity/BepInEx startup, physical item merging, actual freshness changes, owner
+transfer, native saves/reloads and multiplayer remain untested. On a disposable
+host/dedicated world, update all participating clients and the server, restart,
+and test both barrel/ordinary directions, same-state pairs, differing freshness,
+each manager's custom item policy, pickup/re-drop, ownership/zone changes and
+save/reload. Compare total barrel, ground, chest and consumed counts. Repeat
+without each optional mod. The older release sections below are historical.
+
+```powershell
+dotnet build tests/AzuCompatibilityChecks.csproj -c Debug
+python tests/run_azu_mono.py <original-game-directory> <fixed-FLG.dll> <old-FineDining-Release.dll> <BepInEx-core-directory> "idm-composition:<profile-plugins-directory>"
+python tests/run_azu_mono.py <original-game-directory> <fixed-FLG.dll> <fixed-coordinated-FineDining.dll> <BepInEx-core-directory> "idm-fine-composition:<profile-plugins-directory>"
+python tests/run_azu_mono.py <original-game-directory> <fixed-FLG.dll> <fixed-coordinated-FineDining.dll> <BepInEx-core-directory> "epic-composition:<profile-plugins-directory>"
+```
+
 ## Release 1.2.1 (2026-10-31)
 
 - Debug and normal Release builds completed with zero warnings/errors; each
